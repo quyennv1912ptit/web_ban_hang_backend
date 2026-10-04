@@ -3,7 +3,12 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import CheckConstraint, DateTime, Numeric
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, SQLModel, Relationship
+
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from web_ban_hang_backend.models.order import Order
 
 
 def utcnow() -> datetime:
@@ -22,6 +27,7 @@ class OrderItem(SQLModel, table=True):
     product_id: UUID | None = Field(
         default=None, foreign_key="products.id", ondelete="SET NULL", index=True
     )
+    order: Optional["Order"] = Relationship(back_populates="items")    
     product_name: str
     quantity: int = 1
     price: Decimal = Field(sa_type=Numeric(12, 0))

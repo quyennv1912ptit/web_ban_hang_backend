@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import DateTime, UniqueConstraint
 
 class CartItem(SQLModel, table=True):
-    __tablename__ = "cart_itmes" # pyright: ignore[reportAssignmentType]
+    __tablename__ = "cart_items" # pyright: ignore[reportAssignmentType]
     __table_args__ = (
         UniqueConstraint("cart_id", "product_id", name="cart_items_cart_id_product_id_key"),
     )

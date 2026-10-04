@@ -3,8 +3,10 @@ from decimal import Decimal
 from enum import Enum
 from uuid import UUID, uuid4
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import CheckConstraint, DateTime, Numeric
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, SQLModel, Relationship
 
 
 def utcnow() -> datetime:
@@ -19,6 +21,9 @@ class OrderStatus(str, Enum):
 
 
 _STATUS_VALUES = ", ".join(f"'{s.value}'" for s in OrderStatus)
+
+if TYPE_CHECKING:
+    from web_ban_hang_backend.models.order_item import OrderItem
 
 
 class Order(SQLModel, table=True):
@@ -35,6 +40,11 @@ class Order(SQLModel, table=True):
     address_id: UUID | None = Field(
         default=None, foreign_key="user_addresses.id", ondelete="SET NULL", index=True
     )
+    items: list["OrderItem"] = Relationship(
+        back_populates="order",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
+    hidden_by_user: bool = Field(default=False)
     total_amount: Decimal = Field(sa_type=Numeric(12, 0))
     shipping_fee: Decimal = Field(default=Decimal("0"), sa_type=Numeric(12, 0))
     status: str = Field(default=OrderStatus.PENDING.value)

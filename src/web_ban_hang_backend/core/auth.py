@@ -39,3 +39,13 @@ def get_current_user(decoded: TokenDep, session: SessionDep) -> User:
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+def get_admin_user(current_user: CurrentUser) -> User:
+    if current_user.role != "admin":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Bạn không có quyền truy cập chức năng này"
+        )
+    return current_user
+
+AdminUser = Annotated[User, Depends(get_admin_user)]

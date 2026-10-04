@@ -1,8 +1,10 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from web_ban_hang_backend.core.auth import AdminUser
 
 router = APIRouter(
     prefix="/admin",
-    tags=["Admin"]
+    tags=["Admin"],
+    dependencies=[Depends(lambda: AdminUser)]
 )
 
 # 1. CRUD QUẢN LÝ SẢN PHẨM (Products)
