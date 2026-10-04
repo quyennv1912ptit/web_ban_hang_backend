@@ -10,7 +10,6 @@ from web_ban_hang_backend.models.user import User
 
 bearer = HTTPBearer()
 
-
 def verify_token(
     cred: Annotated[HTTPAuthorizationCredentials, Depends(bearer)]
 ) -> dict:

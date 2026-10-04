@@ -1,10 +1,6 @@
-from typing import TYPE_CHECKING
-
 from sqlmodel import Field, Relationship, SQLModel
 
-if TYPE_CHECKING:
-    from web_ban_hang_backend.models.product import Product
-
+from web_ban_hang_backend.models.product import Product
 
 class Category(SQLModel, table=True):
     __tablename__ = "categories"  # pyright: ignore[reportAssignmentType]
