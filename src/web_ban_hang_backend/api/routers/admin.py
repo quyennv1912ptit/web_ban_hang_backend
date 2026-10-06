@@ -1,5 +1,9 @@
 from fastapi import APIRouter, Depends
 from web_ban_hang_backend.core.auth import AdminUser
+from web_ban_hang_backend.schemas.product import ProductCreate
+from web_ban_hang_backend.core.database import SessionDep
+from web_ban_hang_backend.core.deps import ModelStateDep
+from web_ban_hang_backend.models.product import Product
 
 router = APIRouter(
     prefix="/admin",
@@ -13,9 +17,12 @@ async def get_admin_products():
     pass
 
 @router.post("/products")
-async def create_product():
-    pass
-
+async def create_product(data: ProductCreate, session: SessionDep, models: ModelStateDep):
+    text_vec = models.text_model.encode(f"{data.name} {data.description}" or "")
+    product = Product(
+        **data.model_dump(),
+        text_vec = text_vec
+    )
 @router.get("/products/{product_id}")
 async def get_admin_product_detail(product_id: str):
     pass

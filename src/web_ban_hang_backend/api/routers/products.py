@@ -1,8 +1,9 @@
 import logging
 from decimal import Decimal
 from uuid import UUID
+import anyio
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Form, UploadFile, File
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlmodel import paginate
 from sqlalchemy.exc import IntegrityError
@@ -10,12 +11,17 @@ from sqlmodel import Session, col, desc, func, select
 
 from web_ban_hang_backend.core.auth import CurrentUser
 from web_ban_hang_backend.core.database import SessionDep
+from web_ban_hang_backend.core.deps import ModelStateDep
 from web_ban_hang_backend.models.order import Order, OrderStatus
 from web_ban_hang_backend.models.order_item import OrderItem
 from web_ban_hang_backend.models.product import Product
 from web_ban_hang_backend.models.review import Review
 from web_ban_hang_backend.schemas.product import ProductRead
 from web_ban_hang_backend.schemas.review import ReviewCreate, ReviewRead, ReviewUpdate
+
+from web_ban_hang_backend.services.embedding import embed_text, embed_image_bytes
+
+from web_ban_hang_backend.services.fusion import fuse_vectors
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +61,6 @@ def get_own_review(
     return review
 
 
-
 @router.get("/", response_model=Page[ProductRead])
 def get_all_products(session: SessionDep):
     products = select(Product).order_by(desc(Product.created_at))
@@ -69,6 +74,23 @@ def get_product_detail(session: SessionDep, product_id: UUID):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy sản phẩm")
     return product
 
+@router.post("/search")
+async  def search_product(
+    models: ModelStateDep,
+    q: str|None = Form(None),
+    image: UploadFile = File(None)
+):
+    text_vec = None
+    image_vec = None
+
+    if q:
+        text_vec = await anyio.to_thread.run_sync(embed_text, models, q)
+
+    if image is not None:
+        raw = await image.read()
+        image_vec = await anyio.to_thread.run_sync(embed_image_bytes, models, raw)
+
+    query_vec = fuse_vectors(text_vec, image_vec)
 
 
 @router.get("/{product_id}/reviews", response_model=Page[ReviewRead])
