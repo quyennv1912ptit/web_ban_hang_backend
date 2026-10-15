@@ -1,9 +1,9 @@
 import logging
 from decimal import Decimal
 from uuid import UUID
-import anyio
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException, status, Form, UploadFile, File
+from fastapi import APIRouter, HTTPException, status, Query, UploadFile, File
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlmodel import paginate
 from sqlalchemy.exc import IntegrityError
@@ -60,12 +60,63 @@ def get_own_review(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy đánh giá")
     return review
 
+# --- CÁC ROUTE TÌM KIẾM & LỌC (MỚI & ĐƯỢC CẬP NHẬT) ---
 
 @router.get("/", response_model=Page[ProductRead])
-def get_all_products(session: SessionDep):
-    products = select(Product).order_by(desc(Product.created_at))
-    return paginate(session, products)  # type: ignore
+def get_all_products(
+    session: SessionDep,
+    q: Optional[str] = None,
+    category_id: Optional[UUID] = None,
+    min_price: Optional[Decimal] = None,
+    max_price: Optional[Decimal] = None,
+    on_sale: Optional[bool] = None,
+    sort: Optional[str] = Query(None, description="newest, best_selling, price_asc, price_desc, top_rated"),
+):
+    query = select(Product).where(Product.is_active == True)
 
+    if q:
+        query = query.where(Product.name.ilike(f"%{q}%"))
+    if category_id:
+        query = query.where(Product.category_id == category_id)
+    if min_price is not None:
+        query = query.where(Product.price >= min_price)
+    if max_price is not None:
+        query = query.where(Product.price <= max_price)
+    # Lọc on_sale tùy vào logic field giảm giá của bạn
+    # if on_sale: 
+    #     query = query.where(Product.discount_price != None)
+
+    if sort == "price_asc":
+        query = query.order_by(col(Product.price).asc())
+    elif sort == "price_desc":
+        query = query.order_by(col(Product.price).desc())
+    elif sort == "top_rated":
+        query = query.order_by(col(Product.average_rating).desc())
+    else: # newest fallback
+        query = query.order_by(desc(Product.created_at))
+
+    return paginate(session, query)  # type: ignore
+
+@router.get("/search", response_model=Page[ProductRead])
+def search_products(q: str, session: SessionDep):
+    """Tìm theo văn bản bằng embedding bge-m3 và pgvector (Cần implement embedding logic)."""
+    # TODO: Gọi model bge-m3 để lấy embedding của `q`. Ví dụ vec = get_embedding(q)
+    # query = select(Product).order_by(Product.embedding.l2_distance(vec))
+    pass
+
+@router.post("/search/image")
+async def search_products_by_image(file: UploadFile = File(...), session: SessionDep = None):
+    """Upload ảnh, tìm sản phẩm giống bằng Jina-CLIP."""
+    # TODO: Gọi Jina-CLIP sinh embedding cho ảnh, query pgvector.
+    pass
+
+@router.get("/suggestions")
+def get_product_suggestions(session: SessionDep):
+    """Gợi ý hôm nay cho trang chủ."""
+    query = select(Product).where(Product.is_active == True).order_by(func.random()).limit(10)
+    return session.exec(query).all()
+
+# --- CHI TIẾT SẢN PHẨM & TƯƠNG TỰ ---
 
 @router.get("/{product_id}", response_model=ProductRead)
 def get_product_detail(session: SessionDep, product_id: UUID):
@@ -74,24 +125,14 @@ def get_product_detail(session: SessionDep, product_id: UUID):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy sản phẩm")
     return product
 
-@router.post("/search")
-async  def search_product(
-    models: ModelStateDep,
-    q: str|None = Form(None),
-    image: UploadFile = File(None)
-):
-    text_vec = None
-    image_vec = None
+@router.get("/{product_id}/related")
+def get_related_products(product_id: UUID, session: SessionDep):
+    """Sản phẩm tương tự theo embedding."""
+    # TODO: Lấy Product hiện tại -> Lấy embedding của nó -> Query KNN cosine similarity.
+    pass
 
-    if q:
-        text_vec = await anyio.to_thread.run_sync(embed_text, models, q)
 
-    if image is not None:
-        raw = await image.read()
-        image_vec = await anyio.to_thread.run_sync(embed_image_bytes, models, raw)
-
-    query_vec = fuse_vectors(text_vec, image_vec)
-
+# --- CÁC ROUTE REVIEWS (GIỮ NGUYÊN TỪ MÃ CŨ CỦA BẠN) ---
 
 @router.get("/{product_id}/reviews", response_model=Page[ReviewRead])
 def get_product_reviews(session: SessionDep, product_id: UUID):

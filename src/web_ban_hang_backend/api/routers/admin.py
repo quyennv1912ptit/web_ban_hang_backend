@@ -1,71 +1,260 @@
-from fastapi import APIRouter, Depends
-from web_ban_hang_backend.core.auth import AdminUser
-from web_ban_hang_backend.schemas.product import ProductCreate
-from web_ban_hang_backend.core.database import SessionDep
-from web_ban_hang_backend.core.deps import ModelStateDep
-from web_ban_hang_backend.models.product import Product
+import logging
+from uuid import UUID
+from typing import List, Optional
+from decimal import Decimal
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status
+from sqlmodel import select, func
+from fastapi_pagination import Page
+from fastapi_pagination.ext.sqlmodel import paginate
+from pydantic import BaseModel
 
+from web_ban_hang_backend.core.auth import AdminUser
+from web_ban_hang_backend.core.database import SessionDep
+from web_ban_hang_backend.models.product import Product
+from web_ban_hang_backend.models.category import Category
+from web_ban_hang_backend.models.order import Order, OrderStatus
+from web_ban_hang_backend.models.user import User
+from web_ban_hang_backend.models.review import Review
+from web_ban_hang_backend.models.product_image import ProductImage
+from web_ban_hang_backend.api.routers.products import refresh_product_rating # Tái sử dụng hàm tính lại rating
+
+logger = logging.getLogger(__name__)
+
+# Lưu ý: Chỉnh lại `Depends(AdminUser)` nếu class dependency của bạn yêu cầu cách gọi khác
 router = APIRouter(
     prefix="/admin",
     tags=["Admin"],
-    dependencies=[Depends(lambda: AdminUser)]
+    dependencies=[Depends(AdminUser)], 
+    responses={404: {"description": "Not found"}},
 )
 
+# --- SCHEMAS TẠM THỜI (Nên chuyển vào thư mục schemas sau) ---
+class CategoryCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    image_url: Optional[str] = None
+
+class ProductCreate(BaseModel):
+    name: str
+    description: str
+    price: Decimal
+    stock_quantity: int
+    category_id: UUID
+    is_active: bool = True
+
+class OrderStatusUpdate(BaseModel):
+    status: int # Giá trị của enum OrderStatus
+
+class UserStatusUpdate(BaseModel):
+    is_active: bool
+
+
+# ==========================================
 # 1. CRUD QUẢN LÝ SẢN PHẨM (Products)
-@router.get("/products")
-async def get_admin_products():
-    pass
+# ==========================================
+@router.get("/products", response_model=Page[Product])
+def get_admin_products(session: SessionDep):
+    """Danh sách sản phẩm (có phân trang)"""
+    return paginate(session, select(Product).order_by(Product.created_at.desc()))
 
-@router.post("/products")
-async def create_product(data: ProductCreate, session: SessionDep, models: ModelStateDep):
-    text_vec = models.text_model.encode(f"{data.name} {data.description}" or "")
-    product = Product(
-        **data.model_dump(),
-        text_vec = text_vec
-    )
-@router.get("/products/{product_id}")
-async def get_admin_product_detail(product_id: str):
-    pass
+@router.post("/products", response_model=Product, status_code=status.HTTP_201_CREATED)
+def create_product(data: ProductCreate, session: SessionDep):
+    """Tạo sản phẩm mới"""
+    product = Product(**data.model_dump())
+    session.add(product)
+    session.commit()
+    session.refresh(product)
+    return product
 
-@router.put("/products/{product_id}")
-async def update_product(product_id: str):
-    pass
+@router.get("/products/{product_id}", response_model=Product)
+def get_admin_product_detail(product_id: UUID, session: SessionDep):
+    product = session.get(Product, product_id)
+    if not product:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy sản phẩm")
+    return product
 
-@router.delete("/products/{product_id}")
-async def delete_product(product_id: str):
-    pass
+@router.put("/products/{product_id}", response_model=Product)
+def update_product(product_id: UUID, data: ProductCreate, session: SessionDep):
+    product = session.get(Product, product_id)
+    if not product:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy sản phẩm")
+    
+    product.sqlmodel_update(data.model_dump(exclude_unset=True))
+    session.add(product)
+    session.commit()
+    session.refresh(product)
+    return product
 
+@router.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_product(product_id: UUID, session: SessionDep):
+    product = session.get(Product, product_id)
+    if not product:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy sản phẩm")
+    session.delete(product)
+    session.commit()
+
+# --- QUẢN LÝ ẢNH SẢN PHẨM ---
+@router.post("/products/{product_id}/images")
+async def upload_product_image(product_id: UUID, session: SessionDep, file: UploadFile = File(...)):
+    product = session.get(Product, product_id)
+    if not product:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy sản phẩm")
+        
+    # TODO: Implement upload file lên Cloud (AWS S3, Firebase Storage, Cloudinary, v.v.)
+    # TODO: Gọi model Jina-CLIP sinh embedding cho file ảnh này
+    fake_image_url = f"https://example.com/uploads/{file.filename}"
+    
+    image = ProductImage(product_id=product_id, image_url=fake_image_url)
+    session.add(image)
+    session.commit()
+    return {"message": "Upload thành công", "image_url": fake_image_url}
+
+@router.delete("/products/{product_id}/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_product_image(product_id: UUID, image_id: UUID, session: SessionDep):
+    image = session.exec(
+        select(ProductImage).where(ProductImage.id == image_id, ProductImage.product_id == product_id)
+    ).first()
+    if not image:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy ảnh")
+    session.delete(image)
+    session.commit()
+
+
+# ==========================================
 # 2. CRUD QUẢN LÝ DANH MỤC (Categories)
-@router.get("/categories")
-async def get_admin_categories():
-    pass
+# ==========================================
+@router.get("/categories", response_model=List[Category])
+def get_admin_categories(session: SessionDep):
+    return session.exec(select(Category)).all()
 
-@router.post("/categories")
-async def create_category():
-    pass
+@router.post("/categories", response_model=Category, status_code=status.HTTP_201_CREATED)
+def create_category(data: CategoryCreate, session: SessionDep):
+    category = Category(**data.model_dump())
+    session.add(category)
+    session.commit()
+    session.refresh(category)
+    return category
 
-@router.get("/categories/{category_id}")
-async def get_admin_category_detail(category_id: int):
-    pass
+@router.get("/categories/{category_id}", response_model=Category)
+def get_admin_category_detail(category_id: UUID, session: SessionDep):
+    category = session.get(Category, category_id)
+    if not category:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy danh mục")
+    return category
 
-@router.put("/categories/{category_id}")
-async def update_category(category_id: int):
-    pass
+@router.put("/categories/{category_id}", response_model=Category)
+def update_category(category_id: UUID, data: CategoryCreate, session: SessionDep):
+    category = session.get(Category, category_id)
+    if not category:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy danh mục")
+    category.sqlmodel_update(data.model_dump(exclude_unset=True))
+    session.add(category)
+    session.commit()
+    session.refresh(category)
+    return category
 
-@router.delete("/categories/{category_id}")
-async def delete_category(category_id: int):
-    pass
+@router.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_category(category_id: UUID, session: SessionDep):
+    category = session.get(Category, category_id)
+    if not category:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy danh mục")
+    session.delete(category)
+    session.commit()
 
+
+# ==========================================
 # 3. QUẢN LÝ ĐƠN HÀNG (Orders)
-@router.get("/orders")
-async def get_all_orders():
-    pass
+# ==========================================
+@router.get("/orders", response_model=Page[Order])
+def get_all_orders(session: SessionDep):
+    """Danh sách tất cả đơn hàng trên hệ thống"""
+    return paginate(session, select(Order).order_by(Order.created_at.desc()))
+
+@router.get("/orders/{order_id}")
+def get_admin_order_detail(order_id: UUID, session: SessionDep):
+    """Chi tiết đơn hàng kèm các items bên trong"""
+    order = session.get(Order, order_id)
+    if not order:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy đơn hàng")
+    return order
 
 @router.patch("/orders/{order_id}/status")
-async def update_order_status(order_id: str):
-    pass
+def update_order_status(order_id: UUID, data: OrderStatusUpdate, session: SessionDep):
+    """Cập nhật trạng thái đơn hàng (ví dụ: Chờ xử lý -> Đang giao)"""
+    order = session.get(Order, order_id)
+    if not order:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy đơn hàng")
+    
+    order.status = data.status
+    session.commit()
+    session.refresh(order)
+    return order
 
-# 4. THỐNG KÊ (Analytics)
+
+# ==========================================
+# 4. QUẢN LÝ NGƯỜI DÙNG (Users)
+# ==========================================
+@router.get("/users", response_model=Page[User])
+def get_all_users(session: SessionDep):
+    return paginate(session, select(User).order_by(User.created_at.desc()))
+
+@router.patch("/users/{user_id}")
+def update_user_status(user_id: UUID, data: UserStatusUpdate, session: SessionDep):
+    """Khóa hoặc mở khóa tài khoản người dùng"""
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy người dùng")
+    
+    user.is_active = data.is_active
+    session.commit()
+    session.refresh(user)
+    return {"message": "Đã cập nhật trạng thái người dùng", "is_active": user.is_active}
+
+
+# ==========================================
+# 5. QUẢN LÝ ĐÁNH GIÁ (Reviews)
+# ==========================================
+@router.get("/reviews", response_model=Page[Review])
+def get_admin_reviews(session: SessionDep):
+    """Lấy danh sách tất cả đánh giá để kiểm duyệt"""
+    return paginate(session, select(Review).order_by(Review.created_at.desc()))
+
+@router.delete("/reviews/{review_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_admin_review(review_id: UUID, session: SessionDep):
+    """Xóa đánh giá vi phạm và tính lại rating trung bình của sản phẩm"""
+    review = session.get(Review, review_id)
+    if not review:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy đánh giá")
+    
+    product_id = review.product_id
+    session.delete(review)
+    session.flush() # Xóa tạm thời để tính lại rating
+    
+    # Tính lại rating trung bình cho sản phẩm sau khi xóa
+    refresh_product_rating(session, product_id)
+    
+    session.commit()
+
+
+# ==========================================
+# 6. THỐNG KÊ (Analytics)
+# ==========================================
 @router.get("/analytics")
-async def get_analytics():
-    pass
+def get_analytics(session: SessionDep):
+    """Trả về các con số thống kê tổng quan cho Dashboard Admin"""
+    total_users = session.exec(select(func.count(User.id))).one()
+    total_products = session.exec(select(func.count(Product.id))).one()
+    total_orders = session.exec(select(func.count(Order.id))).one()
+    
+    # Tính tổng doanh thu từ các đơn hàng đã giao (Giả sử status = 4 là DELIVERED)
+    total_revenue_result = session.exec(
+        select(func.sum(Order.total_amount)).where(Order.status == OrderStatus.DELIVERED.value)
+    ).one()
+    total_revenue = total_revenue_result if total_revenue_result else 0
+
+    return {
+        "total_users": total_users,
+        "total_products": total_products,
+        "total_orders": total_orders,
+        "total_revenue": total_revenue
+    }

@@ -1,18 +1,18 @@
-# Python-generated files
+# Môi trường ảo (Virtual Environment)
+.venv/
+venv/
+env/
+
+# Cache của Python
 __pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+*.py[cod]
+*$py.class
 
-# Virtual environments
-.venv
-
+# File môi trường chứa mật khẩu, API key (TUYỆT ĐỐI KHÔNG PUSH)
 .env
 
+# Các file hệ thống khác
+.DS_Store
+.vscode/
+
 serviceAccount.json
-
-.idea
-
-.vscode
