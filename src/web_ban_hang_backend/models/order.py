@@ -15,9 +15,11 @@ def utcnow() -> datetime:
 
 class OrderStatus(str, Enum):
     PENDING = "pending"
-    SHIPPING = "shipping"
+    PROCESSING = "processing"
+    SHIPPED = "shipped"
     DELIVERED = "delivered"
     CANCELLED = "cancelled"
+    RETURNED = "returned"
 
 
 _STATUS_VALUES = ", ".join(f"'{s.value}'" for s in OrderStatus)
@@ -29,14 +31,12 @@ if TYPE_CHECKING:
 class Order(SQLModel, table=True):
     __tablename__ = "orders"  # pyright: ignore[reportAssignmentType]
     __table_args__ = (
-        CheckConstraint(f"status IN ({_STATUS_VALUES})", name="orders_status_valid"),
-        CheckConstraint(
-            "total_amount >= 0 AND shipping_fee >= 0", name="orders_amount_nonneg"
-        ),
+        CheckConstraint(f"status IN ({_STATUS_VALUES})", name="orders_status_check"),
+        CheckConstraint("total_amount >= 0", name="orders_total_amount_check"),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    user_id: UUID = Field(foreign_key="users.id", ondelete="CASCADE", index=True)
+    user_id: UUID = Field(foreign_key="users.id", ondelete="SET NULL", index=True)
     address_id: UUID | None = Field(
         default=None, foreign_key="user_addresses.id", ondelete="SET NULL", index=True
     )
@@ -44,7 +44,6 @@ class Order(SQLModel, table=True):
         back_populates="order",
         sa_relationship_kwargs={"cascade": "all, delete-orphan"}
     )
-    hidden_by_user: bool = Field(default=False)
     total_amount: Decimal = Field(sa_type=Numeric(12, 0))
     shipping_fee: Decimal = Field(default=Decimal("0"), sa_type=Numeric(12, 0))
     status: str = Field(default=OrderStatus.PENDING.value)

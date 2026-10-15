@@ -1,10 +1,13 @@
 from sqlmodel import SQLModel, Field
 from datetime import datetime, timezone
-from sqlalchemy import DateTime
+from sqlalchemy import CheckConstraint, DateTime
 import uuid
 
 class User(SQLModel, table=True):
     __tablename__ = "users"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        CheckConstraint("role IN ('customer', 'admin')", name="users_role_check"),
+    )
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     firebase_uid: str = Field(unique=True, index=True)
     email: str | None = None

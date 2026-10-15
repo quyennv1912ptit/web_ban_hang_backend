@@ -24,7 +24,7 @@ class ProductRead(SQLModel):
     sold_count: int = 0
     average_rating: Decimal = Decimal("0")
     sku: str | None = None
-    weight_grams: int = 0
+    weight_grams: int | None = 0
 
     category: CategoryRead | None = None
     images: list[ProductImageRead] = Field(default_factory=list)
@@ -37,17 +37,17 @@ from typing import Any
 from sqlmodel import SQLModel, Field
 
 class ProductCreate(SQLModel):
-    category_id: int
+    category_id: int | None = None
     name: str = Field(min_length=1, max_length=255)
-    slug: str | None = Field(default=None, max_length=255)
+    slug: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=5000)
 
-    price: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
-    original_price: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    price: Decimal = Field(ge=0, max_digits=12, decimal_places=0)
+    original_price: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=0)
 
     attributes: dict[str, Any] = Field(default_factory=dict)  # người bán nhập
 
     stock_quantity: int = Field(default=0, ge=0)
     sku: str | None = Field(default=None, max_length=64)
-    weight_grams: int = Field(default=0, ge=0)
+    weight_grams: int | None = Field(default=0, ge=0)
     is_active: bool = True

@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, Computed, DateTime, Numeric, text
+from sqlalchemy import CheckConstraint, Column, Computed, DateTime, Numeric, text
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -19,6 +19,16 @@ def _utcnow() -> datetime:
 
 class Product(SQLModel, table=True):
     __tablename__ = "products"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        CheckConstraint("price >= 0", name="products_price_check"),
+        CheckConstraint("original_price IS NULL OR original_price >= price", name="products_check"),
+        CheckConstraint("stock_quantity >= 0", name="products_stock_quantity_check"),
+        CheckConstraint(
+            "average_rating >= 0 AND average_rating <= 5",
+            name="products_average_rating_check",
+        ),
+        CheckConstraint("weight_grams >= 0", name="products_weight_grams_check"),
+    )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     category_id: int | None = Field(

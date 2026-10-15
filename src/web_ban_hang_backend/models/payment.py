@@ -1,7 +1,7 @@
 from enum import Enum  # Import thêm Enum từ thư viện chuẩn của Python
 from sqlmodel import SQLModel, Field
 from uuid import UUID, uuid4
-from sqlalchemy import Numeric, DateTime
+from sqlalchemy import CheckConstraint, DateTime, Numeric, Text, text
 from decimal import Decimal
 from datetime import datetime, timezone
 # Bỏ import Literal
@@ -25,13 +25,27 @@ class PaymentStatus(str, Enum):
 
 class Payment(SQLModel, table=True):
     __tablename__ = "payments" # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        CheckConstraint(
+            "payment_method IN ('cod', 'vnpay', 'momo', 'credit_card')",
+            name="payments_payment_method_check",
+        ),
+        CheckConstraint(
+            "status IN ('unpaid', 'processing', 'completed', 'failed', 'refunded')",
+            name="payments_status_check",
+        ),
+    )
     
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     order_id: UUID = Field(foreign_key="orders.id", unique=True, ondelete="CASCADE")
     
-    payment_method: PaymentMethod
+    payment_method: str = Field(sa_type=Text)
     # 2. Đặt giá trị mặc định bằng class Enum
-    status: PaymentStatus = Field(default=PaymentStatus.UNPAID)
+    status: str = Field(
+        default=PaymentStatus.UNPAID.value,
+        sa_type=Text,
+        sa_column_kwargs={"server_default": text("'unpaid'")},
+    )
     
     transaction_id: str | None = None
     amount: Decimal = Field(sa_type=Numeric(12, 0))

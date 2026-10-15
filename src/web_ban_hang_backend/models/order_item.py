@@ -18,8 +18,7 @@ def utcnow() -> datetime:
 class OrderItem(SQLModel, table=True):
     __tablename__ = "order_items"  # pyright: ignore[reportAssignmentType]
     __table_args__ = (
-        CheckConstraint("quantity >= 1", name="order_items_quantity_positive"),
-        CheckConstraint("price >= 0", name="order_items_price_nonneg"),
+        CheckConstraint("quantity > 0", name="order_items_quantity_check"),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -29,7 +28,7 @@ class OrderItem(SQLModel, table=True):
     )
     order: Optional["Order"] = Relationship(back_populates="items")    
     product_name: str
-    quantity: int = 1
+    quantity: int
     price: Decimal = Field(sa_type=Numeric(12, 0))
 
     created_at: datetime = Field(default_factory=utcnow, sa_type=DateTime(timezone=True))

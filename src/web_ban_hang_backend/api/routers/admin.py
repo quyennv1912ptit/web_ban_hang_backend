@@ -1,12 +1,12 @@
 import logging
 from uuid import UUID
-from typing import List, Optional
+from typing import Any, List, Literal, Optional
 from decimal import Decimal
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, status
 from sqlmodel import select, func
 from fastapi_pagination import Page
 from fastapi_pagination.ext.sqlmodel import paginate
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from web_ban_hang_backend.core.auth import AdminUser
 from web_ban_hang_backend.core.database import SessionDep
@@ -31,22 +31,30 @@ router = APIRouter(
 # --- SCHEMAS TẠM THỜI (Nên chuyển vào thư mục schemas sau) ---
 class CategoryCreate(BaseModel):
     name: str
-    description: Optional[str] = None
-    image_url: Optional[str] = None
+    slug: str
+    parent_id: Optional[int] = None
+    icon: Optional[str] = None
 
 class ProductCreate(BaseModel):
+    category_id: Optional[int] = None
     name: str
-    description: str
-    price: Decimal
-    stock_quantity: int
-    category_id: UUID
+    slug: str
+    description: Optional[str] = None
+    price: Decimal = Field(ge=0, max_digits=12, decimal_places=0)
+    original_price: Optional[Decimal] = Field(
+        default=None, ge=0, max_digits=12, decimal_places=0
+    )
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    stock_quantity: int = Field(default=0, ge=0)
     is_active: bool = True
+    sku: Optional[str] = None
+    weight_grams: Optional[int] = Field(default=0, ge=0)
 
 class OrderStatusUpdate(BaseModel):
-    status: int # Giá trị của enum OrderStatus
+    status: OrderStatus
 
-class UserStatusUpdate(BaseModel):
-    is_active: bool
+class UserRoleUpdate(BaseModel):
+    role: Literal["customer", "admin"]
 
 
 # ==========================================
@@ -104,10 +112,19 @@ async def upload_product_image(product_id: UUID, session: SessionDep, file: Uplo
     # TODO: Gọi model Jina-CLIP sinh embedding cho file ảnh này
     fake_image_url = f"https://example.com/uploads/{file.filename}"
     
-    image = ProductImage(product_id=product_id, image_url=fake_image_url)
+    next_position = session.exec(
+        select(func.coalesce(func.max(ProductImage.position), -1)).where(
+            ProductImage.product_id == product_id
+        )
+    ).one() + 1
+    image = ProductImage(
+        product_id=product_id,
+        original_url=fake_image_url,
+        position=next_position,
+    )
     session.add(image)
     session.commit()
-    return {"message": "Upload thành công", "image_url": fake_image_url}
+    return {"message": "Upload thành công", "original_url": fake_image_url}
 
 @router.delete("/products/{product_id}/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_product_image(product_id: UUID, image_id: UUID, session: SessionDep):
@@ -136,14 +153,14 @@ def create_category(data: CategoryCreate, session: SessionDep):
     return category
 
 @router.get("/categories/{category_id}", response_model=Category)
-def get_admin_category_detail(category_id: UUID, session: SessionDep):
+def get_admin_category_detail(category_id: int, session: SessionDep):
     category = session.get(Category, category_id)
     if not category:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy danh mục")
     return category
 
 @router.put("/categories/{category_id}", response_model=Category)
-def update_category(category_id: UUID, data: CategoryCreate, session: SessionDep):
+def update_category(category_id: int, data: CategoryCreate, session: SessionDep):
     category = session.get(Category, category_id)
     if not category:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy danh mục")
@@ -154,7 +171,7 @@ def update_category(category_id: UUID, data: CategoryCreate, session: SessionDep
     return category
 
 @router.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_category(category_id: UUID, session: SessionDep):
+def delete_category(category_id: int, session: SessionDep):
     category = session.get(Category, category_id)
     if not category:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy danh mục")
@@ -185,7 +202,7 @@ def update_order_status(order_id: UUID, data: OrderStatusUpdate, session: Sessio
     if not order:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy đơn hàng")
     
-    order.status = data.status
+    order.status = data.status.value
     session.commit()
     session.refresh(order)
     return order
@@ -199,16 +216,16 @@ def get_all_users(session: SessionDep):
     return paginate(session, select(User).order_by(User.created_at.desc()))
 
 @router.patch("/users/{user_id}")
-def update_user_status(user_id: UUID, data: UserStatusUpdate, session: SessionDep):
-    """Khóa hoặc mở khóa tài khoản người dùng"""
+def update_user_role(user_id: UUID, data: UserRoleUpdate, session: SessionDep):
+    """Cập nhật vai trò người dùng"""
     user = session.get(User, user_id)
     if not user:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy người dùng")
     
-    user.is_active = data.is_active
+    user.role = data.role
     session.commit()
     session.refresh(user)
-    return {"message": "Đã cập nhật trạng thái người dùng", "is_active": user.is_active}
+    return {"message": "Đã cập nhật vai trò người dùng", "role": user.role}
 
 
 # ==========================================
@@ -246,7 +263,7 @@ def get_analytics(session: SessionDep):
     total_products = session.exec(select(func.count(Product.id))).one()
     total_orders = session.exec(select(func.count(Order.id))).one()
     
-    # Tính tổng doanh thu từ các đơn hàng đã giao (Giả sử status = 4 là DELIVERED)
+    # Tính tổng doanh thu từ các đơn hàng đã giao.
     total_revenue_result = session.exec(
         select(func.sum(Order.total_amount)).where(Order.status == OrderStatus.DELIVERED.value)
     ).one()

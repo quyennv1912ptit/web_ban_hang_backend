@@ -66,7 +66,7 @@ def get_own_review(
 def get_all_products(
     session: SessionDep,
     q: Optional[str] = None,
-    category_id: Optional[UUID] = None,
+    category_id: Optional[int] = None,
     min_price: Optional[Decimal] = None,
     max_price: Optional[Decimal] = None,
     on_sale: Optional[bool] = None,
@@ -82,11 +82,15 @@ def get_all_products(
         query = query.where(Product.price >= min_price)
     if max_price is not None:
         query = query.where(Product.price <= max_price)
-    # Lọc on_sale tùy vào logic field giảm giá của bạn
-    # if on_sale: 
-    #     query = query.where(Product.discount_price != None)
+    if on_sale:
+        query = query.where(
+            Product.original_price.is_not(None),
+            Product.original_price > Product.price,
+        )
 
-    if sort == "price_asc":
+    if sort == "best_selling":
+        query = query.order_by(col(Product.sold_count).desc())
+    elif sort == "price_asc":
         query = query.order_by(col(Product.price).asc())
     elif sort == "price_desc":
         query = query.order_by(col(Product.price).desc())
@@ -101,7 +105,7 @@ def get_all_products(
 def search_products(q: str, session: SessionDep):
     """Tìm theo văn bản bằng embedding bge-m3 và pgvector (Cần implement embedding logic)."""
     # TODO: Gọi model bge-m3 để lấy embedding của `q`. Ví dụ vec = get_embedding(q)
-    # query = select(Product).order_by(Product.embedding.l2_distance(vec))
+    # query = select(Product).order_by(Product.semantic_embedding.l2_distance(vec))
     pass
 
 @router.post("/search/image")

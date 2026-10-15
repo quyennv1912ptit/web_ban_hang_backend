@@ -38,8 +38,7 @@ class CreateOrderRequest(OrderRequest):
 # --- GET /orders ---
 @router.get("/", response_model=Page[OrderRead])
 def get_orders_history(current_user: CurrentUser, session: SessionDep, order_status: OrderStatus | None = Query(default=None, alias="status")):
-    # Đã thêm lọc hidden_by_user == False
-    query = select(Order).where(Order.user_id == current_user.id, Order.hidden_by_user == False)
+    query = select(Order).where(Order.user_id == current_user.id)
     if order_status:
         query = query.where(Order.status == order_status.value)
     query = query.order_by(col(Order.created_at).desc(), col(Order.id))
@@ -140,8 +139,8 @@ def create_order(data: CreateOrderRequest, current_user: CurrentUser, session: S
     payment = Payment(
         order_id=order.id,
         amount=order.total_amount,
-        payment_method=data.payment_method,
-        status=PaymentStatus.PENDING
+        payment_method=data.payment_method.value,
+        status=PaymentStatus.UNPAID.value,
     )
     session.add(payment)
 
@@ -264,30 +263,10 @@ def cancel_pending_order(order_id: UUID, current_user: CurrentUser, session: Ses
 
 @router.delete("/{order_id}", status_code=status.HTTP_204_NO_CONTENT)
 def hide_order(order_id: UUID, current_user: CurrentUser, session: SessionDep):
-    order = session.exec(
-        select(Order)
-        .where(
-            Order.id == order_id,
-            Order.user_id == current_user.id
-        )
-    ).first()
-    
-    if not order:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy đơn hàng")
-        
-    if order.status not in (OrderStatus.DELIVERED.value, OrderStatus.CANCELLED.value):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Chỉ có thể xóa đơn đã giao hoặc đã hủy. Với đơn đang xử lý, hãy hủy đơn trước."
-        )
-        
-    order.hidden_by_user = True
-    try:
-        session.commit()
-    except Exception:
-        session.rollback()
-        logger.exception("Lỗi khi xóa đơn hàng")
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Không thể xóa đơn hàng. Vui lòng thử lại!")
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Database hiện không có cột ẩn đơn hàng; thao tác này chưa được hỗ trợ.",
+    )
 
 
 # --- POST /orders/{order_id}/pay (MỚI) ---
@@ -302,8 +281,8 @@ def mock_pay_order(order_id: UUID, current_user: CurrentUser, session: SessionDe
     if not payment:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy thông tin thanh toán")
 
-    payment.status = PaymentStatus.PAID
-    order.status = OrderStatus.PROCESSING.value  # Đổi trạng thái đơn để bắt đầu chuẩn bị hàng
+    payment.status = PaymentStatus.COMPLETED.value
+    order.status = OrderStatus.PROCESSING.value
     
     session.commit()
     return {"message": "Thanh toán giả lập thành công"}
