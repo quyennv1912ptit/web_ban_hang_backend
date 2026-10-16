@@ -167,22 +167,25 @@ def add_product_review(
     if not product:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy sản phẩm")
 
+    # BẮT BUỘC TÌM ĐƠN HÀNG ĐÃ GIAO (DELIVERED) CHỨA ĐÚNG SẢN PHẨM NÀY CỦA USER
     order = session.exec(
         select(Order)
         .join(OrderItem, OrderItem.order_id == Order.id)  # type: ignore
         .where(
-            Order.id == data.order_id,
             Order.user_id == current_user.id,
-            Order.status == OrderStatus.DELIVERED.value,
-            OrderItem.product_id == product_id,
+            Order.status == OrderStatus.DELIVERED.value, # Phải là đã giao hàng
+            OrderItem.product_id == product_id,          # Phải đúng món này
         )
     ).first()
+
+    # Nếu chưa mua hoặc chưa nhận hàng -> CHẶN NGAY LẬP TỨC
     if not order:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "Bạn chỉ có thể đánh giá sản phẩm đã mua và nhận hàng",
+            "Bạn chỉ có thể đánh giá sản phẩm này sau khi đã mua và nhận hàng thành công!",
         )
 
+    # Đã mua rồi mới cho lưu đánh giá gắn liền với order_id đó
     review = Review(
         user_id=current_user.id,
         product_id=product_id,
@@ -199,14 +202,14 @@ def add_product_review(
         session.rollback()
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "Bạn đã đánh giá sản phẩm này cho đơn hàng này",
+            "Bạn đã đánh giá sản phẩm này rồi",
         )
-    except Exception:
+    except Exception as e:
         session.rollback()
         logger.exception("Lỗi thêm đánh giá")
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            "Không thể thêm đánh giá. Vui lòng thử lại!",
+            f"Không thể thêm đánh giá: {str(e)}",
         )
 
     session.refresh(review)

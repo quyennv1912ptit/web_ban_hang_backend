@@ -1,12 +1,13 @@
 from sqlmodel import SQLModel, Field
 from uuid import UUID
 from datetime import datetime
-
+from typing import Optional
 
 class ReviewCreate(SQLModel):
-    order_id: UUID
+    order_id: Optional[UUID] = None
     rating: int = Field(ge=1, le=5)
     comment: str | None = Field(default=None, max_length=1000)
+
 
 
 class ReviewUpdate(SQLModel):

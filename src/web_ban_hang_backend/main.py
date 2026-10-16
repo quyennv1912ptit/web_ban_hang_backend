@@ -14,7 +14,8 @@ from web_ban_hang_backend.api.routers import (
     products,
     cart,
     orders,
-    admin
+    admin,
+    favorites
 )
 
 init_firebase()
@@ -44,3 +45,4 @@ app.include_router(products.router, prefix="/api")
 app.include_router(cart.router, prefix="/api")
 app.include_router(orders.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
+app.include_router(favorites.router, prefix="/api")
