@@ -1,13 +1,15 @@
 import logging
 from decimal import Decimal
 from uuid import UUID
-from typing import Optional
+from typing import Literal, Optional
 
-from fastapi import APIRouter, HTTPException, status, Query, UploadFile, File
-from fastapi_pagination import Page
-from fastapi_pagination.ext.sqlmodel import paginate
+from fastapi import APIRouter, Form, HTTPException, status, Query, UploadFile, File
+from fastapi import Depends
+from fastapi_pagination import Page, Params
+from fastapi_pagination import paginate as paginate_items
+from fastapi_pagination.ext.sqlmodel import paginate as paginate_query
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, col, desc, func, select
+from sqlmodel import Session, col, desc, func, or_, select
 
 from web_ban_hang_backend.core.auth import CurrentUser
 from web_ban_hang_backend.core.database import SessionDep
@@ -19,9 +21,14 @@ from web_ban_hang_backend.models.review import Review
 from web_ban_hang_backend.schemas.product import ProductRead
 from web_ban_hang_backend.schemas.review import ReviewCreate, ReviewRead, ReviewUpdate
 
-from web_ban_hang_backend.services.embedding import embed_text, embed_image_bytes
-
-from web_ban_hang_backend.services.fusion import fuse_vectors
+from web_ban_hang_backend.services.search import execute_hybrid_search
+from web_ban_hang_backend.services.image_utils import (
+    MAX_IMAGE_BYTES,
+    ImageTooLarge,
+    ImageValidationError,
+    UnsupportedImageFormat,
+    decode_image_bytes,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +40,6 @@ router = APIRouter(
 
 
 def refresh_product_rating(session: Session, product_id: UUID) -> None:
-    """Tính lại average_rating. Gọi sau flush(), trước commit()."""
     product = session.get(Product, product_id)
     if not product:
         return
@@ -61,30 +67,65 @@ def get_own_review(
     return review
 
 # --- CÁC ROUTE TÌM KIẾM & LỌC (MỚI & ĐƯỢC CẬP NHẬT) ---
+def paginate_ranked_products(
+    session: Session,
+    product_ids: list[UUID],
+    params: Params,
+):
+    if not product_ids:
+        return paginate_items([], params=params)
+
+    stmt = select(Product).where(
+        Product.id.in_(product_ids),
+        Product.is_active.is_(True),
+    )
+
+    products = session.exec(stmt).all()
+    products_by_id = {product.id: product for product in products}
+
+    ordered_products = [
+        products_by_id[product_id]
+        for product_id in product_ids
+        if product_id in products_by_id
+    ]
+
+    return paginate_items(ordered_products, params=params)
 
 @router.get("/", response_model=Page[ProductRead])
 def get_all_products(
     session: SessionDep,
     q: Optional[str] = None,
-    category_id: Optional[UUID] = None,
+    category_id: Optional[int] = None,
     min_price: Optional[Decimal] = None,
     max_price: Optional[Decimal] = None,
     on_sale: Optional[bool] = None,
-    sort: Optional[str] = Query(None, description="newest, best_selling, price_asc, price_desc, top_rated"),
+    sort: Optional[Literal["newest", "best_selling", "price_asc", "price_desc", "top_rated"]] = Query(
+        None,
+        description="newest, best_selling, price_asc, price_desc, top_rated",
+    ),
 ):
-    query = select(Product).where(Product.is_active == True)
+    query = select(Product).where(Product.is_active.is_(True))
 
     if q:
         query = query.where(Product.name.ilike(f"%{q}%"))
-    if category_id:
+    if category_id is not None:
         query = query.where(Product.category_id == category_id)
     if min_price is not None:
         query = query.where(Product.price >= min_price)
     if max_price is not None:
         query = query.where(Product.price <= max_price)
-    # Lọc on_sale tùy vào logic field giảm giá của bạn
-    # if on_sale: 
-    #     query = query.where(Product.discount_price != None)
+    discounted = Product.original_price.is_not(None) & (
+        Product.original_price > Product.price
+    )
+    if on_sale is True:
+        query = query.where(discounted)
+    elif on_sale is False:
+        query = query.where(
+            or_(
+                Product.original_price.is_(None),
+                Product.original_price <= Product.price,
+            )
+        )
 
     if sort == "price_asc":
         query = query.order_by(col(Product.price).asc())
@@ -92,47 +133,160 @@ def get_all_products(
         query = query.order_by(col(Product.price).desc())
     elif sort == "top_rated":
         query = query.order_by(col(Product.average_rating).desc())
+    elif sort == "best_selling":
+        query = query.order_by(desc(Product.sold_count), desc(Product.created_at))
     else: # newest fallback
         query = query.order_by(desc(Product.created_at))
 
-    return paginate(session, query)  # type: ignore
+    return paginate_query(session, query)  # type: ignore
 
 @router.get("/search", response_model=Page[ProductRead])
-def search_products(q: str, session: SessionDep):
-    """Tìm theo văn bản bằng embedding bge-m3 và pgvector (Cần implement embedding logic)."""
-    # TODO: Gọi model bge-m3 để lấy embedding của `q`. Ví dụ vec = get_embedding(q)
-    # query = select(Product).order_by(Product.embedding.l2_distance(vec))
-    pass
+def search_products(
+    session: SessionDep,
+    model_state: ModelStateDep,
+    q: str = Query(..., min_length=1),
+    category_id: Optional[int] = None,
+    min_price: Optional[Decimal] = None,
+    max_price: Optional[Decimal] = None,
+    params: Params = Depends()
+):
+    if model_state is None or not model_state.ready:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Mô hình tìm kiếm chưa sẵn sàng",
+        )
 
-@router.post("/search/image")
-async def search_products_by_image(file: UploadFile = File(...), session: SessionDep = None):
-    """Upload ảnh, tìm sản phẩm giống bằng Jina-CLIP."""
-    # TODO: Gọi Jina-CLIP sinh embedding cho ảnh, query pgvector.
-    pass
+    q = q.strip()
 
-@router.get("/suggestions")
+    if not q:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Từ khóa tìm kiếm không được để trống",
+        )
+
+    product_ids = execute_hybrid_search(
+        session=session,
+        model_state=model_state,
+        q=q,
+        image=None,
+        category_id=category_id,
+        min_price=min_price,
+        max_price=max_price,
+    )
+
+    return paginate_ranked_products(
+        session,
+        product_ids,
+        params,
+    )
+
+@router.post("/search/image", response_model=Page[ProductRead])
+def search_products_by_image(
+    session: SessionDep,
+    model_state: ModelStateDep,
+    file: UploadFile = File(...),
+    q: Optional[str] = Form(None),
+    category_id: Optional[int] = None,
+    min_price: Optional[Decimal] = None,
+    max_price: Optional[Decimal] = None,
+    params: Params = Depends(),
+):
+    if model_state is None or not model_state.ready:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Mô hình tìm kiếm hình ảnh chưa sẵn sàng",
+        )
+
+    image_bytes = file.file.read(MAX_IMAGE_BYTES + 1)
+    try:
+        image = decode_image_bytes(image_bytes)
+    except UnsupportedImageFormat as exc:
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            "Chỉ chấp nhận ảnh JPEG, PNG hoặc WEBP",
+        ) from exc
+    except ImageTooLarge as exc:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            str(exc),
+        ) from exc
+    except ImageValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    product_ids = execute_hybrid_search(
+        session=session,
+        model_state=model_state,
+        q=q.strip() if q and q.strip() else None,
+        image=image,
+        category_id=category_id,
+        min_price=min_price,
+        max_price=max_price,
+    )
+
+    return paginate_ranked_products(
+        session,
+        product_ids,
+        params,
+    )
+
+@router.get("/suggestions", response_model=list[ProductRead])
 def get_product_suggestions(session: SessionDep):
-    """Gợi ý hôm nay cho trang chủ."""
-    query = select(Product).where(Product.is_active == True).order_by(func.random()).limit(10)
-    return session.exec(query).all()
+    stmt = (
+        select(Product)
+        .where(Product.is_active.is_(True))
+        .order_by(func.random())
+        .limit(10)
+    )
 
-# --- CHI TIẾT SẢN PHẨM & TƯƠNG TỰ ---
+    return session.exec(stmt).all()
 
 @router.get("/{product_id}", response_model=ProductRead)
-def get_product_detail(session: SessionDep, product_id: UUID):
+def get_product_detail(
+    product_id: UUID,
+    session: SessionDep,
+):
     product = session.get(Product, product_id)
-    if not product:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy sản phẩm")
+
+    if product is None or not product.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Không tìm thấy sản phẩm",
+        )
+
     return product
 
-@router.get("/{product_id}/related")
-def get_related_products(product_id: UUID, session: SessionDep):
-    """Sản phẩm tương tự theo embedding."""
-    # TODO: Lấy Product hiện tại -> Lấy embedding của nó -> Query KNN cosine similarity.
-    pass
+@router.get("/{product_id}/related", response_model=list[ProductRead])
+def get_related_products(
+    product_id: UUID,
+    session: SessionDep,
+):
+    product = session.get(Product, product_id)
 
+    if product is None or not product.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Không tìm thấy sản phẩm",
+        )
 
-# --- CÁC ROUTE REVIEWS (GIỮ NGUYÊN TỪ MÃ CŨ CỦA BẠN) ---
+    if product.semantic_embedding is None:
+        return []
+
+    stmt = (
+        select(Product)
+        .where(
+            Product.is_active.is_(True),
+            Product.id != product_id,
+            Product.semantic_embedding.is_not(None),
+        )
+        .order_by(
+            Product.semantic_embedding.cosine_distance(
+                product.semantic_embedding
+            ).asc()
+        )
+        .limit(10)
+    )
+
+    return session.exec(stmt).all()
 
 @router.get("/{product_id}/reviews", response_model=Page[ReviewRead])
 def get_product_reviews(session: SessionDep, product_id: UUID):
@@ -145,7 +299,7 @@ def get_product_reviews(session: SessionDep, product_id: UUID):
         .where(Review.product_id == product_id)
         .order_by(col(Review.created_at).desc(), col(Review.id))
     )
-    return paginate(session, reviews)  # type: ignore
+    return paginate_query(session, reviews)  # type: ignore
 
 
 @router.post(

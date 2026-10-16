@@ -5,6 +5,7 @@ from decimal import Decimal
 from sqlmodel import SQLModel, Field
 
 from web_ban_hang_backend.schemas.order_item import OrderItemRead, OrderItemCreate
+from web_ban_hang_backend.models.order import OrderStatus
 
 
 class OrderRead(SQLModel):
@@ -29,3 +30,6 @@ class OrderRequest(SQLModel):
     address_id: UUID
     note: str | None = Field(default=None, max_length=500)
     items: list[OrderItemCreate] = Field(min_length=1, max_length=50)
+
+class OrderStatusUpdate(SQLModel):
+    status: OrderStatus  # nhận chuỗi: pending/processing/shipped/delivered/cancelled/returned

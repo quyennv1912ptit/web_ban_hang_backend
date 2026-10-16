@@ -1,20 +1,22 @@
-from enum import Enum  # Import thêm Enum từ thư viện chuẩn của Python
-from sqlmodel import SQLModel, Field
-from uuid import UUID, uuid4
-from sqlalchemy import Numeric, DateTime
-from decimal import Decimal
 from datetime import datetime, timezone
-# Bỏ import Literal
+from decimal import Decimal
+from enum import Enum
+from uuid import UUID, uuid4
+
+from sqlalchemy import CheckConstraint, DateTime, Numeric
+from sqlmodel import Field, SQLModel
+
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
-# 1. Chuyển đổi Literal thành class Enum (kế thừa str để lưu vào DB dưới dạng text)
+
 class PaymentMethod(str, Enum):
     COD = "cod"
     VNPAY = "vnpay"
     MOMO = "momo"
     CREDIT_CARD = "credit_card"
+
 
 class PaymentStatus(str, Enum):
     UNPAID = "unpaid"
@@ -23,25 +25,36 @@ class PaymentStatus(str, Enum):
     FAILED = "failed"
     REFUNDED = "refunded"
 
+
+_METHOD_VALUES = ", ".join(f"'{m.value}'" for m in PaymentMethod)
+_STATUS_VALUES = ", ".join(f"'{s.value}'" for s in PaymentStatus)
+
+
 class Payment(SQLModel, table=True):
-    __tablename__ = "payments" # pyright: ignore[reportAssignmentType]
-    
+    __tablename__ = "payments"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        CheckConstraint(
+            f"payment_method IN ({_METHOD_VALUES})", name="payments_payment_method_check"
+        ),
+        CheckConstraint(f"status IN ({_STATUS_VALUES})", name="payments_status_check"),
+        CheckConstraint("amount >= 0", name="payments_amount_check"),
+    )
+
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     order_id: UUID = Field(foreign_key="orders.id", unique=True, ondelete="CASCADE")
-    
-    payment_method: PaymentMethod
-    # 2. Đặt giá trị mặc định bằng class Enum
-    status: PaymentStatus = Field(default=PaymentStatus.UNPAID)
-    
+
+    # Cột DB là TEXT + CHECK nên model lưu str thường (giống Order.status).
+    # Nếu khai báo kiểu Enum, SQLModel sẽ dùng kiểu enum của SQLAlchemy và ghi TÊN
+    # thành viên ("COD") thay vì giá trị ("cod") -> vi phạm CHECK của DB.
+    # Dùng PaymentMethod / PaymentStatus ở schema API để kiểm tra đầu vào.
+    payment_method: str
+    status: str = Field(default=PaymentStatus.UNPAID.value)
+
     transaction_id: str | None = None
     amount: Decimal = Field(sa_type=Numeric(12, 0))
-
-    # 3. Lưu ý nhỏ: paid_at nên để mặc định là None vì lúc mới tạo đơn chưa được thanh toán
     paid_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
 
-    created_at: datetime = Field(
-        default_factory=utcnow, sa_type=DateTime(timezone=True)
-    )
+    created_at: datetime = Field(default_factory=utcnow, sa_type=DateTime(timezone=True))
     updated_at: datetime = Field(
         default_factory=utcnow,
         sa_type=DateTime(timezone=True),

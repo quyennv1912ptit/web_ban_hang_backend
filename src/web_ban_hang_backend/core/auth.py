@@ -34,6 +34,11 @@ def get_current_user(decoded: TokenDep, session: SessionDep) -> User:
             status.HTTP_404_NOT_FOUND,
             "Tài khoản không tồn tại hoặc chưa được đồng bộ",
         )
+    if not user.is_active:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Tài khoản đã bị khóa",
+        )
 
     return user
 

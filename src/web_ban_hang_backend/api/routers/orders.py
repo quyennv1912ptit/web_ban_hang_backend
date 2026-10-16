@@ -7,6 +7,7 @@ from decimal import Decimal
 from collections import defaultdict
 import logging
 from typing import Optional
+from datetime import datetime, timezone
 
 from web_ban_hang_backend.core.auth import CurrentUser
 from web_ban_hang_backend.core.database import SessionDep
@@ -115,6 +116,7 @@ def create_order(data: CreateOrderRequest, current_user: CurrentUser, session: S
             )
             
         product.stock_quantity -= qty
+        product.sold_count += qty
         session.add(product)
         order_items.append(
             OrderItem(
@@ -132,20 +134,18 @@ def create_order(data: CreateOrderRequest, current_user: CurrentUser, session: S
     order.shipping_fee = shipping_fee
     order.total_amount = subtotal + shipping_fee
 
-    session.add(order)
-    session.add_all(order_items)
-    session.flush() # Flush để lấy order.id cho Payment
-    
-    # Tạo bản ghi Payment
-    payment = Payment(
-        order_id=order.id,
-        amount=order.total_amount,
-        payment_method=data.payment_method,
-        status=PaymentStatus.PENDING
-    )
-    session.add(payment)
-
     try:
+        session.add(order)
+        session.add_all(order_items)
+        session.flush()
+
+        payment = Payment(
+            order_id=order.id,
+            amount=order.total_amount,
+            payment_method=data.payment_method.value,
+            status=PaymentStatus.UNPAID.value,
+        )
+        session.add(payment)
         session.commit()
     except Exception:
         session.rollback()
@@ -166,6 +166,7 @@ def update_order_info(data: OrderUpdateSchema, current_user: CurrentUser, sessio
             Order.id == order_id,
             Order.user_id == current_user.id
         )
+        .with_for_update()
     ).first()
     
     if not order:
@@ -212,6 +213,7 @@ def cancel_pending_order(order_id: UUID, current_user: CurrentUser, session: Ses
             Order.id == order_id,
             Order.user_id == current_user.id
         )
+        .with_for_update()
     ).first()
     
     if not order:
@@ -246,6 +248,7 @@ def cancel_pending_order(order_id: UUID, current_user: CurrentUser, session: Ses
         product = products.get(item.product_id) if item.product_id else None
         if product:
             product.stock_quantity += item.quantity
+            product.sold_count = max(0, product.sold_count - item.quantity)
             
     order.status = OrderStatus.CANCELLED.value
     
@@ -294,16 +297,48 @@ def hide_order(order_id: UUID, current_user: CurrentUser, session: SessionDep):
 @router.post("/{order_id}/pay")
 def mock_pay_order(order_id: UUID, current_user: CurrentUser, session: SessionDep):
     """Giả lập thanh toán: đánh dấu Payment là đã trả."""
-    order = session.exec(select(Order).where(Order.id == order_id, Order.user_id == current_user.id)).first()
+    order = session.exec(
+        select(Order)
+        .where(Order.id == order_id, Order.user_id == current_user.id)
+        .with_for_update()
+    ).first()
     if not order:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy đơn đặt hàng")
     
-    payment = session.exec(select(Payment).where(Payment.order_id == order.id)).first()
+    payment = session.exec(
+        select(Payment).where(Payment.order_id == order.id).with_for_update()
+    ).first()
     if not payment:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy thông tin thanh toán")
 
-    payment.status = PaymentStatus.PAID
-    order.status = OrderStatus.PROCESSING.value  # Đổi trạng thái đơn để bắt đầu chuẩn bị hàng
-    
-    session.commit()
+    if payment.status == PaymentStatus.COMPLETED.value:
+        return {"message": "Đơn hàng đã được thanh toán"}
+    if order.status != OrderStatus.PENDING.value:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Chỉ có thể thanh toán đơn hàng đang chờ xử lý",
+        )
+    if payment.payment_method == PaymentMethod.COD.value:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Đơn hàng thanh toán khi nhận hàng không cần thanh toán trực tuyến",
+        )
+    if payment.status != PaymentStatus.UNPAID.value:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Trạng thái thanh toán hiện tại không thể thanh toán",
+        )
+
+    payment.status = PaymentStatus.COMPLETED.value
+    payment.paid_at = datetime.now(timezone.utc)
+    order.status = OrderStatus.PROCESSING.value
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("Lỗi khi thanh toán đơn hàng")
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Không thể thanh toán đơn hàng. Vui lòng thử lại!",
+        )
     return {"message": "Thanh toán giả lập thành công"}

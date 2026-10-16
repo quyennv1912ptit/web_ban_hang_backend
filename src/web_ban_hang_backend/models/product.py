@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Column, Computed, DateTime, Numeric, text
+from sqlalchemy import CheckConstraint, Column, Computed, DateTime, Numeric, text
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -13,12 +13,27 @@ if TYPE_CHECKING:
     from web_ban_hang_backend.models.product_image import ProductImage
 
 
+TEXT_EMBED_DIM = 1024
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
 class Product(SQLModel, table=True):
     __tablename__ = "products"  # pyright: ignore[reportAssignmentType]
+
+    __table_args__ = (
+        CheckConstraint("price >= 0", name="products_price_check"),
+        CheckConstraint("original_price >= price", name="products_check"),
+        CheckConstraint("stock_quantity >= 0", name="products_stock_quantity_check"),
+        CheckConstraint("sold_count >= 0", name="products_sold_count_check"),
+        CheckConstraint("weight_grams >= 0", name="products_weight_grams_check"),
+        CheckConstraint(
+            "average_rating >= 0 AND average_rating <= 5",
+            name="products_average_rating_check",
+        ),
+    )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     category_id: int | None = Field(
@@ -46,9 +61,6 @@ class Product(SQLModel, table=True):
         ),
     )
 
-    semantic_embedding: list[float] | None = Field(
-        default=None, sa_column=Column(Vector(1024))
-    )
 
     is_active: bool = True
     stock_quantity: int = 0
@@ -57,11 +69,24 @@ class Product(SQLModel, table=True):
     sku: str | None = Field(default=None, unique=True)
     weight_grams: int | None = 0
 
+    semantic_embedding: list[float] | None = Field(
+        default=None, sa_column=Column(Vector(TEXT_EMBED_DIM))
+    )
+    embedding_model: str | None = None
+    embedding_text_hash: str | None = None
+    embedding_updated_at: datetime | None = Field(
+        default=None, sa_type=DateTime(timezone=True)
+    )
+
     category: Optional["Category"] = Relationship(back_populates="products")
     images: list["ProductImage"] = Relationship(
         back_populates="product",
         sa_relationship_kwargs={"cascade": "all, delete-orphan", "passive_deletes": True},
     )
-  
+
     created_at: datetime = Field(default_factory=_utcnow, sa_type=DateTime(timezone=True))
-    updated_at: datetime = Field(default_factory=_utcnow, sa_type=DateTime(timezone=True))
+    updated_at: datetime = Field(
+        default_factory=_utcnow,
+        sa_type=DateTime(timezone=True),
+        sa_column_kwargs={"onupdate": _utcnow},
+    )

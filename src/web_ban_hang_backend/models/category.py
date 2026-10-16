@@ -1,9 +1,17 @@
+from sqlalchemy import CheckConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
 from web_ban_hang_backend.models.product import Product
 
+
 class Category(SQLModel, table=True):
     __tablename__ = "categories"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        CheckConstraint(
+            "parent_id IS NULL OR parent_id <> id",
+            name="categories_parent_not_self_check",
+        ),
+    )
 
     id: int | None = Field(default=None, primary_key=True)
     name: str
@@ -11,7 +19,6 @@ class Category(SQLModel, table=True):
     parent_id: int | None = Field(
         default=None, foreign_key="categories.id", ondelete="SET NULL", index=True
     )
-    
     icon: str | None = None
 
     products: list["Product"] = Relationship(back_populates="category")

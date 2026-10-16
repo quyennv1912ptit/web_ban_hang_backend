@@ -1,11 +1,10 @@
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import TYPE_CHECKING, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import CheckConstraint, DateTime, Numeric
-from sqlmodel import Field, SQLModel, Relationship
-
-from typing import TYPE_CHECKING, Optional
+from sqlmodel import Field, Relationship, SQLModel
 
 if TYPE_CHECKING:
     from web_ban_hang_backend.models.order import Order
@@ -18,8 +17,8 @@ def utcnow() -> datetime:
 class OrderItem(SQLModel, table=True):
     __tablename__ = "order_items"  # pyright: ignore[reportAssignmentType]
     __table_args__ = (
-        CheckConstraint("quantity >= 1", name="order_items_quantity_positive"),
-        CheckConstraint("price >= 0", name="order_items_price_nonneg"),
+        CheckConstraint("quantity > 0", name="order_items_quantity_check"),
+        CheckConstraint("price >= 0", name="order_items_price_check"),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -27,7 +26,7 @@ class OrderItem(SQLModel, table=True):
     product_id: UUID | None = Field(
         default=None, foreign_key="products.id", ondelete="SET NULL", index=True
     )
-    order: Optional["Order"] = Relationship(back_populates="items")    
+    order: Optional["Order"] = Relationship(back_populates="items")
     product_name: str
     quantity: int = 1
     price: Decimal = Field(sa_type=Numeric(12, 0))

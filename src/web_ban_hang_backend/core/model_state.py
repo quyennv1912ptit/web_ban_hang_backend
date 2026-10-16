@@ -9,6 +9,10 @@ class ModelState:
     image_model: AutoModel
     device: str
 
+    @property
+    def ready(self) -> bool:
+        return self.text_model is not None and self.image_model is not None
+
 model_state: ModelState | None = None
 
 def load_models() -> ModelState:

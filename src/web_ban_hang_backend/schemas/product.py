@@ -31,21 +31,16 @@ class ProductRead(SQLModel):
 
     created_at: datetime
     updated_at: datetime
-    
-from decimal import Decimal
-from typing import Any
-from sqlmodel import SQLModel, Field
 
 class ProductCreate(SQLModel):
     category_id: int
     name: str = Field(min_length=1, max_length=255)
-    slug: str | None = Field(default=None, max_length=255)
     description: str | None = Field(default=None, max_length=5000)
 
-    price: Decimal = Field(gt=0, max_digits=12, decimal_places=2)
-    original_price: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=2)
+    price: Decimal = Field(gt=0, max_digits=12, decimal_places=0)
+    original_price: Decimal | None = Field(default=None, gt=0, max_digits=12, decimal_places=0)
 
-    attributes: dict[str, Any] = Field(default_factory=dict)  # người bán nhập
+    attributes: dict[str, Any] = Field(default_factory=dict)
 
     stock_quantity: int = Field(default=0, ge=0)
     sku: str | None = Field(default=None, max_length=64)
