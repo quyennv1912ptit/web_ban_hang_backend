@@ -16,6 +16,10 @@ class ProductImage(SQLModel, table=True):
     product_id: uuid.UUID = Field(
         foreign_key="products.id", ondelete="CASCADE", index=True
     )
+    
+    # THÊM TRƯỜNG NÀY VÀO ĐỂ KHỚP VỚI DATABASE POSTGRESQL:
+    image_url: str 
+    
     original_url: str
     cropped_url: str | None = None
     caption: str | None = None

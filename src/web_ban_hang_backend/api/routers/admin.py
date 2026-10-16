@@ -108,8 +108,6 @@ async def upload_product_image(product_id: UUID, session: SessionDep, file: Uplo
     if not product:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy sản phẩm")
         
-    # TODO: Implement upload file lên Cloud (AWS S3, Firebase Storage, Cloudinary, v.v.)
-    # TODO: Gọi model Jina-CLIP sinh embedding cho file ảnh này
     fake_image_url = f"https://example.com/uploads/{file.filename}"
     
     next_position = session.exec(
@@ -117,11 +115,15 @@ async def upload_product_image(product_id: UUID, session: SessionDep, file: Uplo
             ProductImage.product_id == product_id
         )
     ).one() + 1
+    
+    # SỬA TẠI ĐÂY: Thêm trường image_url để thỏa mãn ràng buộc NOT NULL của bảng
     image = ProductImage(
         product_id=product_id,
         original_url=fake_image_url,
+        image_url=fake_image_url,  # <--- Khắc phục lỗi NotNullViolation
         position=next_position,
     )
+    
     session.add(image)
     session.commit()
     return {"message": "Upload thành công", "original_url": fake_image_url}
