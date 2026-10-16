@@ -11,7 +11,7 @@ from sqlmodel import Session, col, desc, func, select
 
 from web_ban_hang_backend.core.auth import CurrentUser
 from web_ban_hang_backend.core.database import SessionDep
-from web_ban_hang_backend.core.deps import ModelStateDep
+# from web_ban_hang_backend.core.deps import ModelStateDep
 from web_ban_hang_backend.models.order import Order, OrderStatus
 from web_ban_hang_backend.models.order_item import OrderItem
 from web_ban_hang_backend.models.product import Product
@@ -19,9 +19,9 @@ from web_ban_hang_backend.models.review import Review
 from web_ban_hang_backend.schemas.product import ProductRead
 from web_ban_hang_backend.schemas.review import ReviewCreate, ReviewRead, ReviewUpdate
 
-from web_ban_hang_backend.services.embedding import embed_text, embed_image_bytes
+# from web_ban_hang_backend.services.embedding import embed_text, embed_image_bytes
 
-from web_ban_hang_backend.services.fusion import fuse_vectors
+# from web_ban_hang_backend.services.fusion import fuse_vectors
 
 logger = logging.getLogger(__name__)
 

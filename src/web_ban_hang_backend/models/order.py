@@ -5,7 +5,8 @@ from uuid import UUID, uuid4
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, DateTime, Numeric
+from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Numeric
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel, Relationship
 
 
@@ -36,7 +37,18 @@ class Order(SQLModel, table=True):
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    user_id: UUID = Field(foreign_key="users.id", ondelete="SET NULL", index=True)
+    # Neon currently defines user_id as NOT NULL while its FK says ON DELETE SET NULL.
+    # Declare the SQLAlchemy column directly to preserve that existing DDL without
+    # SQLModel rejecting the contradictory nullable/ondelete combination.
+    user_id: UUID = Field(
+        default_factory=uuid4,
+        sa_column=Column(
+            PGUUID(as_uuid=True),
+            ForeignKey("users.id", ondelete="SET NULL"),
+            nullable=False,
+            index=True,
+        ),
+    )
     address_id: UUID | None = Field(
         default=None, foreign_key="user_addresses.id", ondelete="SET NULL", index=True
     )
