@@ -26,17 +26,30 @@ class CartItemUpdate(BaseModel):
 
 @router.get("/")
 def get_all_products_in_cart(current_user: CurrentUser, session: SessionDep):
-    """Lấy các sản phẩm trong giỏ"""
-    # BƯỚC 1: Tìm Cart của User
+    """Lấy các sản phẩm trong giỏ kèm theo thông tin chi tiết (tên, giá)"""
     cart = session.exec(select(Cart).where(Cart.user_id == current_user.id)).first()
     if not cart:
-        return [] # Nếu chưa có giỏ hàng thì trả về mảng rỗng
+        return [] 
         
-    # BƯỚC 2: Tìm CartItem bằng cart_id
-    items = session.exec(
-        select(CartItem).where(CartItem.cart_id == cart.id)
-    ).all()
-    return items
+    # KẾT NỐI (JOIN) bảng CartItem và Product để lấy được name, price, image
+    statement = select(CartItem, Product).where(
+        CartItem.cart_id == cart.id,
+        CartItem.product_id == Product.id
+    )
+    results = session.exec(statement).all()
+    
+    # Định dạng lại cấu trúc JSON trả về để Frontend đọc được
+    response = []
+    for item, product in results:
+        response.append({
+            "id": item.id,
+            "cart_id": item.cart_id,
+            "product_id": item.product_id,
+            "quantity": item.quantity,
+            "product": product  # Nhúng toàn bộ thông tin sản phẩm vào đây
+        })
+        
+    return response
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)

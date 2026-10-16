@@ -36,7 +36,12 @@ class Order(SQLModel, table=True):
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    user_id: UUID = Field(foreign_key="users.id", ondelete="SET NULL", index=True)
+    user_id: UUID | None = Field(
+        default=None,
+        foreign_key="users.id",
+        ondelete="SET NULL",
+        index=True,
+    )
     address_id: UUID | None = Field(
         default=None, foreign_key="user_addresses.id", ondelete="SET NULL", index=True
     )

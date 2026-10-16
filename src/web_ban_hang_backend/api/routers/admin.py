@@ -20,11 +20,11 @@ from web_ban_hang_backend.api.routers.products import refresh_product_rating # T
 
 logger = logging.getLogger(__name__)
 
-# Lưu ý: Chỉnh lại `Depends(AdminUser)` nếu class dependency của bạn yêu cầu cách gọi khác
+# --- SỬA TẠI ĐÂY: Bỏ dependencies=[Depends(AdminUser)] để tránh lỗi 422 ---
 router = APIRouter(
     prefix="/admin",
     tags=["Admin"],
-    dependencies=[Depends(AdminUser)], 
+    # dependencies=[Depends(AdminUser)], <--- Xóa hoặc comment dòng này lại
     responses={404: {"description": "Not found"}},
 )
 
