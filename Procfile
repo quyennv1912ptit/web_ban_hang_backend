@@ -1,0 +1,1 @@
+web: fastapi run src/web_ban_hang_backend/main.py --port=$PORT --host=0.0.0.0
