@@ -6,13 +6,13 @@ from typing import Any, List, Literal, Optional
 from uuid import UUID, uuid4
 
 from cloudinary import uploader
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi_pagination import Page
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi_pagination import Page, Params, paginate as paginate_items
 from fastapi_pagination.ext.sqlmodel import paginate
 from pydantic import BaseModel
 from slugify import slugify
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import func, select
+from sqlmodel import func, or_, select
 
 
 from web_ban_hang_backend.api.routers.products import refresh_product_rating
@@ -33,6 +33,7 @@ from web_ban_hang_backend.schemas.product_image import ProductImageRead
 from web_ban_hang_backend.schemas.order import OrderStatusUpdate
 from web_ban_hang_backend.schemas.category import CategoryCreate
 from web_ban_hang_backend.services.embedding import embed_image, embed_text
+from web_ban_hang_backend.services.search import execute_hybrid_search
 from web_ban_hang_backend.services.image_utils import (
     MAX_IMAGE_BYTES,
     ImageTooLarge,
@@ -76,9 +77,108 @@ class UserRoleUpdate(BaseModel):
 # Quản lý sản phẩm
 
 @router.get("/products", response_model=Page[ProductRead])
-def get_admin_products(session: SessionDep):
-    """Danh sách sản phẩm (có phân trang)"""
-    return paginate(session, select(Product).order_by(Product.created_at.desc()))
+def get_admin_products(
+    session: SessionDep,
+    q: Optional[str] = None,
+    category_id: Optional[int] = None,
+    min_price: Optional[Decimal] = None,
+    max_price: Optional[Decimal] = None,
+    on_sale: Optional[bool] = None,
+    sort: Optional[Literal["newest", "best_selling", "price_asc", "price_desc", "top_rated", "biggest_discount"]] = None,
+    is_active: Optional[bool] = None,
+    params: Params = Depends(),
+):
+    """Danh sách sản phẩm quản trị, có tìm kiếm và lọc phân trang."""
+    if min_price is not None and max_price is not None and min_price > max_price:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Giá tối thiểu không được lớn hơn giá tối đa")
+
+    query = select(Product)
+    if q and q.strip():
+        query = query.where(Product.name.ilike(f"%{q.strip()}%"))
+    if category_id is not None:
+        query = query.where(Product.category_id == category_id)
+    if min_price is not None:
+        query = query.where(Product.price >= min_price)
+    if max_price is not None:
+        query = query.where(Product.price <= max_price)
+    if is_active is not None:
+        query = query.where(Product.is_active.is_(is_active))
+
+    discounted = Product.original_price.is_not(None) & (Product.original_price > Product.price)
+    if on_sale is True:
+        query = query.where(discounted)
+    elif on_sale is False:
+        query = query.where(or_(Product.original_price.is_(None), Product.original_price <= Product.price))
+
+    if sort == "best_selling":
+        query = query.order_by(Product.sold_count.desc(), Product.created_at.desc())
+    elif sort == "price_asc":
+        query = query.order_by(Product.price.asc())
+    elif sort == "price_desc":
+        query = query.order_by(Product.price.desc())
+    elif sort == "top_rated":
+        query = query.order_by(Product.average_rating.desc())
+    elif sort == "biggest_discount":
+        query = query.order_by((Product.original_price - Product.price).desc(), Product.created_at.desc())
+    else:
+        query = query.order_by(Product.created_at.desc())
+
+    return paginate(session, query, params=params)
+
+
+def paginate_admin_ranked_products(session, product_ids: list[UUID], params: Params):
+    if not product_ids:
+        return paginate_items([], params=params)
+
+    products = session.exec(select(Product).where(Product.id.in_(product_ids))).all()
+    products_by_id = {product.id: product for product in products}
+    ordered_products = [products_by_id[product_id] for product_id in product_ids if product_id in products_by_id]
+    return paginate_items(ordered_products, params=params)
+
+
+@router.post("/products/search/image", response_model=Page[ProductRead])
+def search_admin_products_by_image(
+    session: SessionDep,
+    model_state: ModelStateDep,
+    file: UploadFile = File(...),
+    q: Optional[str] = Form(None),
+    category_id: Optional[int] = None,
+    min_price: Optional[Decimal] = None,
+    max_price: Optional[Decimal] = None,
+    on_sale: Optional[bool] = None,
+    is_active: Optional[bool] = None,
+    params: Params = Depends(),
+):
+    if model_state is None or not model_state.ready:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Mô hình tìm kiếm hình ảnh chưa sẵn sàng",
+        )
+    if min_price is not None and max_price is not None and min_price > max_price:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Giá tối thiểu không được lớn hơn giá tối đa")
+
+    image_bytes = file.file.read(MAX_IMAGE_BYTES + 1)
+    try:
+        image = decode_image_bytes(image_bytes)
+    except UnsupportedImageFormat as exc:
+        raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, str(exc)) from exc
+    except ImageTooLarge as exc:
+        raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, str(exc)) from exc
+    except ImageValidationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    product_ids = execute_hybrid_search(
+        session=session,
+        model_state=model_state,
+        q=q.strip() if q and q.strip() else None,
+        image=image,
+        category_id=category_id,
+        min_price=min_price,
+        max_price=max_price,
+        is_active=is_active,
+        on_sale=on_sale,
+    )
+    return paginate_admin_ranked_products(session, product_ids, params)
 
 
 TEXT_EMBEDDING_MODEL = f"BGE-m3@{TEXT_EMBED_DIM}"
