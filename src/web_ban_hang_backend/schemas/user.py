@@ -19,3 +19,6 @@ class UserRead(SQLModel):
     phone_number: str | None = None
     role: str
     created_at: datetime
+
+class UserStatusUpdate(SQLModel):
+    is_active: bool

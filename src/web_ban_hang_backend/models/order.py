@@ -1,18 +1,17 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from typing import TYPE_CHECKING
+from sqlalchemy import CheckConstraint, DateTime, Numeric, text
+from sqlmodel import Field, Relationship, SQLModel
 
-from sqlalchemy import CheckConstraint, Column, DateTime, ForeignKey, Numeric
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlmodel import Field, SQLModel, Relationship
-
+if TYPE_CHECKING:
+    from web_ban_hang_backend.models.order_item import OrderItem
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
 
 class OrderStatus(str, Enum):
     PENDING = "pending"
@@ -22,39 +21,27 @@ class OrderStatus(str, Enum):
     CANCELLED = "cancelled"
     RETURNED = "returned"
 
-
 _STATUS_VALUES = ", ".join(f"'{s.value}'" for s in OrderStatus)
-
-if TYPE_CHECKING:
-    from web_ban_hang_backend.models.order_item import OrderItem
-
 
 class Order(SQLModel, table=True):
     __tablename__ = "orders"  # pyright: ignore[reportAssignmentType]
     __table_args__ = (
         CheckConstraint(f"status IN ({_STATUS_VALUES})", name="orders_status_check"),
         CheckConstraint("total_amount >= 0", name="orders_total_amount_check"),
+        CheckConstraint("shipping_fee >= 0", name="orders_shipping_fee_check"),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    # Neon currently defines user_id as NOT NULL while its FK says ON DELETE SET NULL.
-    # Declare the SQLAlchemy column directly to preserve that existing DDL without
-    # SQLModel rejecting the contradictory nullable/ondelete combination.
-    user_id: UUID = Field(
-        default_factory=uuid4,
-        sa_column=Column(
-            PGUUID(as_uuid=True),
-            ForeignKey("users.id", ondelete="SET NULL"),
-            nullable=False,
-            index=True,
-        ),
-    )
+    user_id: UUID = Field(foreign_key="users.id", ondelete="RESTRICT", index=True)
     address_id: UUID | None = Field(
         default=None, foreign_key="user_addresses.id", ondelete="SET NULL", index=True
     )
     items: list["OrderItem"] = Relationship(
         back_populates="order",
-        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"},
+    )
+    hidden_by_user: bool = Field(
+        default=False, sa_column_kwargs={"server_default": text("false")}
     )
     total_amount: Decimal = Field(sa_type=Numeric(12, 0))
     shipping_fee: Decimal = Field(default=Decimal("0"), sa_type=Numeric(12, 0))

@@ -54,6 +54,11 @@ def sync_user_profile(data: UserSync, decoded: TokenDep, session: SessionDep):
             session.rollback()
             user = session.exec(select(User).where(User.firebase_uid == uid)).first()
     else:
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Tài khoản đã bị khóa",
+            )
         session.refresh(user)
         
     return user
@@ -63,8 +68,6 @@ def sync_user_profile(data: UserSync, decoded: TokenDep, session: SessionDep):
 def get_user_info(current_user: CurrentUser):
     return current_user
 
-
-# --- ROUTE MỚI: CẬP NHẬT PROFILE ---
 @router.put("/me", response_model=UserRead)
 def update_user_profile(data: UserProfileUpdate, current_user: CurrentUser, session: SessionDep):
     if data.display_name is not None:
@@ -179,12 +182,10 @@ def delete_user_addresses(
             detail="Không thể xóa địa chỉ. Vui lòng thử lại!"
         )
 
-# --- ROUTE MỚI: ĐẶT ĐỊA CHỈ MẶC ĐỊNH ---
 @router.put("/addresses/{address_id}/default")
 def set_default_address(
     address_id: UUID, current_user: CurrentUser, session: SessionDep
 ):
-    # Lấy toàn bộ địa chỉ của user
     addresses = session.exec(
         select(UserAddress).where(UserAddress.user_id == current_user.id)
     ).all()
