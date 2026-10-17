@@ -4,10 +4,8 @@ from uuid import UUID, uuid4
 from sqlalchemy import CheckConstraint, DateTime, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
-
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
 
 class Review(SQLModel, table=True):
     __tablename__ = "reviews"  # pyright: ignore[reportAssignmentType]
@@ -22,8 +20,6 @@ class Review(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     user_id: UUID = Field(foreign_key="users.id", ondelete="CASCADE", index=True)
     product_id: UUID = Field(foreign_key="products.id", ondelete="CASCADE", index=True)
-    # DB cho phép NULL và đặt SET NULL khi xóa đơn -> kiểu phải là Optional.
-    # Nếu muốn bắt buộc "chỉ review khi đã mua", kiểm tra ở tầng API.
     order_id: UUID | None = Field(
         default=None, foreign_key="orders.id", ondelete="SET NULL", index=True
     )

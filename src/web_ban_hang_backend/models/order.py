@@ -10,13 +10,10 @@ from sqlmodel import Field, Relationship, SQLModel
 if TYPE_CHECKING:
     from web_ban_hang_backend.models.order_item import OrderItem
 
-
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
-
 class OrderStatus(str, Enum):
-    # Phải trùng đúng danh sách trong CHECK orders_status_check của DB.
     PENDING = "pending"
     PROCESSING = "processing"
     SHIPPED = "shipped"
@@ -24,9 +21,7 @@ class OrderStatus(str, Enum):
     CANCELLED = "cancelled"
     RETURNED = "returned"
 
-
 _STATUS_VALUES = ", ".join(f"'{s.value}'" for s in OrderStatus)
-
 
 class Order(SQLModel, table=True):
     __tablename__ = "orders"  # pyright: ignore[reportAssignmentType]
@@ -37,7 +32,6 @@ class Order(SQLModel, table=True):
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    # RESTRICT: không cho xóa cứng user đã có đơn (giữ lịch sử đơn hàng)
     user_id: UUID = Field(foreign_key="users.id", ondelete="RESTRICT", index=True)
     address_id: UUID | None = Field(
         default=None, foreign_key="user_addresses.id", ondelete="SET NULL", index=True

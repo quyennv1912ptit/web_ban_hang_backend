@@ -9,10 +9,8 @@ from sqlmodel import Field, Relationship, SQLModel
 if TYPE_CHECKING:
     from web_ban_hang_backend.models.order import Order
 
-
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
 
 class OrderItem(SQLModel, table=True):
     __tablename__ = "order_items"  # pyright: ignore[reportAssignmentType]
@@ -28,7 +26,7 @@ class OrderItem(SQLModel, table=True):
     )
     order: Optional["Order"] = Relationship(back_populates="items")
     product_name: str
-    quantity: int = 1
+    quantity: int
     price: Decimal = Field(sa_type=Numeric(12, 0))
 
     created_at: datetime = Field(default_factory=utcnow, sa_type=DateTime(timezone=True))

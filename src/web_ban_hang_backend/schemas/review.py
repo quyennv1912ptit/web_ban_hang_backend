@@ -18,7 +18,7 @@ class ReviewRead(SQLModel):
     id: UUID
     user_id: UUID
     product_id: UUID
-    order_id: UUID
+    order_id: UUID | None = None
     rating: int
     comment: str | None = None
     created_at: datetime

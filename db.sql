@@ -1,5 +1,4 @@
-CREATE SCHEMA IF NOT EXISTS "public";
-CREATE EXTENSION IF NOT EXISTS vector;
+CREATE SCHEMA "public";
 CREATE TABLE "cart_items" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 	"cart_id" uuid NOT NULL,
@@ -79,7 +78,7 @@ CREATE TABLE "product_images" (
 	"indexed_at" timestamp with time zone,
 	"original_url" varchar,
 	"cropped_url" varchar,
-	CONSTRAINT "product_images_product_id_position_key" UNIQUE("product_id","position") DEFERRABLE INITIALLY DEFERRED,
+	CONSTRAINT "product_images_product_id_position_key" UNIQUE("product_id","position"),
 	CONSTRAINT "product_images_embedding_status_check" CHECK ((embedding_status = ANY (ARRAY['pending'::text, 'indexed'::text, 'failed'::text]))),
 	CONSTRAINT "product_images_indexed_has_vector_check" CHECK (((embedding_status <> 'indexed'::text) OR (multimodal_embedding IS NOT NULL))),
 	CONSTRAINT "product_images_position_check" CHECK (("position" >= 0))
@@ -156,26 +155,47 @@ CREATE TABLE "users" (
 	"is_active" boolean DEFAULT true NOT NULL,
 	CONSTRAINT "users_role_check" CHECK ((role = ANY (ARRAY['customer'::text, 'admin'::text])))
 );
+CREATE UNIQUE INDEX "cart_items_cart_id_product_id_key" ON "cart_items" ("cart_id","product_id");
+CREATE UNIQUE INDEX "cart_items_pkey" ON "cart_items" ("id");
 CREATE INDEX "idx_cart_items_product" ON "cart_items" ("product_id");
+CREATE UNIQUE INDEX "carts_pkey" ON "carts" ("id");
+CREATE UNIQUE INDEX "carts_user_id_key" ON "carts" ("user_id");
+CREATE UNIQUE INDEX "categories_pkey" ON "categories" ("id");
+CREATE UNIQUE INDEX "categories_slug_key" ON "categories" ("slug");
 CREATE INDEX "idx_categories_parent" ON "categories" ("parent_id");
 CREATE INDEX "idx_order_items_order" ON "order_items" ("order_id");
 CREATE INDEX "idx_order_items_product" ON "order_items" ("product_id");
+CREATE UNIQUE INDEX "order_items_pkey" ON "order_items" ("id");
 CREATE INDEX "idx_orders_address" ON "orders" ("address_id");
 CREATE INDEX "idx_orders_status" ON "orders" ("status");
 CREATE INDEX "idx_orders_user" ON "orders" ("user_id");
-CREATE INDEX "idx_images_multimodal" ON "product_images" USING hnsw ("multimodal_embedding" vector_cosine_ops);
+CREATE UNIQUE INDEX "orders_pkey" ON "orders" ("id");
+CREATE UNIQUE INDEX "payments_order_id_key" ON "payments" ("order_id");
+CREATE UNIQUE INDEX "payments_pkey" ON "payments" ("id");
+CREATE INDEX "idx_images_multimodal" ON "product_images" USING hnsw ("multimodal_embedding");
 CREATE INDEX "idx_images_pending" ON "product_images" ("embedding_status");
+CREATE UNIQUE INDEX "product_images_pkey" ON "product_images" ("id");
+CREATE UNIQUE INDEX "product_images_product_id_position_key" ON "product_images" ("product_id","position");
 CREATE INDEX "idx_products_active_cat_price" ON "products" ("category_id","price");
 CREATE INDEX "idx_products_active_price" ON "products" ("price");
 CREATE INDEX "idx_products_attributes" ON "products" USING gin ("attributes");
 CREATE INDEX "idx_products_category" ON "products" ("category_id");
 CREATE INDEX "idx_products_search" ON "products" USING gin ("search_vector");
-CREATE INDEX "idx_products_semantic" ON "products" USING hnsw ("semantic_embedding" vector_cosine_ops);
+CREATE INDEX "idx_products_semantic" ON "products" USING hnsw ("semantic_embedding");
 CREATE INDEX "idx_products_unembedded" ON "products" ("id");
+CREATE UNIQUE INDEX "products_pkey" ON "products" ("id");
+CREATE UNIQUE INDEX "products_sku_key" ON "products" ("sku");
+CREATE UNIQUE INDEX "products_slug_key" ON "products" ("slug");
 CREATE INDEX "idx_reviews_order" ON "reviews" ("order_id");
 CREATE INDEX "idx_reviews_product" ON "reviews" ("product_id");
+CREATE UNIQUE INDEX "reviews_pkey" ON "reviews" ("id");
+CREATE UNIQUE INDEX "reviews_user_id_product_id_order_id_key" ON "reviews" ("user_id","product_id","order_id");
 CREATE INDEX "idx_user_addresses_user" ON "user_addresses" ("user_id");
+CREATE UNIQUE INDEX "user_addresses_pkey" ON "user_addresses" ("id");
 CREATE INDEX "idx_user_favorites_product" ON "user_favorites" ("product_id");
+CREATE UNIQUE INDEX "user_favorites_pkey" ON "user_favorites" ("user_id","product_id");
+CREATE UNIQUE INDEX "users_firebase_uid_key" ON "users" ("firebase_uid");
+CREATE UNIQUE INDEX "users_pkey" ON "users" ("id");
 ALTER TABLE "cart_items" ADD CONSTRAINT "cart_items_cart_id_fkey" FOREIGN KEY ("cart_id") REFERENCES "carts"("id") ON DELETE CASCADE;
 ALTER TABLE "cart_items" ADD CONSTRAINT "cart_items_product_id_fkey" FOREIGN KEY ("product_id") REFERENCES "products"("id") ON DELETE CASCADE;
 ALTER TABLE "carts" ADD CONSTRAINT "carts_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE;

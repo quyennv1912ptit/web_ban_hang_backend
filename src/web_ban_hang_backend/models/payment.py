@@ -3,20 +3,17 @@ from decimal import Decimal
 from enum import Enum
 from uuid import UUID, uuid4
 
-from sqlalchemy import CheckConstraint, DateTime, Numeric
+from sqlalchemy import CheckConstraint, DateTime, Numeric, Text, text
 from sqlmodel import Field, SQLModel
-
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
 
 class PaymentMethod(str, Enum):
     COD = "cod"
     VNPAY = "vnpay"
     MOMO = "momo"
     CREDIT_CARD = "credit_card"
-
 
 class PaymentStatus(str, Enum):
     UNPAID = "unpaid"
@@ -25,10 +22,8 @@ class PaymentStatus(str, Enum):
     FAILED = "failed"
     REFUNDED = "refunded"
 
-
 _METHOD_VALUES = ", ".join(f"'{m.value}'" for m in PaymentMethod)
 _STATUS_VALUES = ", ".join(f"'{s.value}'" for s in PaymentStatus)
-
 
 class Payment(SQLModel, table=True):
     __tablename__ = "payments"  # pyright: ignore[reportAssignmentType]
@@ -43,12 +38,12 @@ class Payment(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     order_id: UUID = Field(foreign_key="orders.id", unique=True, ondelete="CASCADE")
 
-    # Cột DB là TEXT + CHECK nên model lưu str thường (giống Order.status).
-    # Nếu khai báo kiểu Enum, SQLModel sẽ dùng kiểu enum của SQLAlchemy và ghi TÊN
-    # thành viên ("COD") thay vì giá trị ("cod") -> vi phạm CHECK của DB.
-    # Dùng PaymentMethod / PaymentStatus ở schema API để kiểm tra đầu vào.
-    payment_method: str
-    status: str = Field(default=PaymentStatus.UNPAID.value)
+    payment_method: str = Field(sa_type=Text)
+    status: str = Field(
+        default=PaymentStatus.UNPAID.value,
+        sa_type=Text,
+        sa_column_kwargs={"server_default": text("'unpaid'")},
+    )
 
     transaction_id: str | None = None
     amount: Decimal = Field(sa_type=Numeric(12, 0))

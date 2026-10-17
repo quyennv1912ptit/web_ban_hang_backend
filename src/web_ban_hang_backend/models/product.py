@@ -22,7 +22,6 @@ def _utcnow() -> datetime:
 
 class Product(SQLModel, table=True):
     __tablename__ = "products"  # pyright: ignore[reportAssignmentType]
-
     __table_args__ = (
         CheckConstraint("price >= 0", name="products_price_check"),
         CheckConstraint("original_price >= price", name="products_check"),

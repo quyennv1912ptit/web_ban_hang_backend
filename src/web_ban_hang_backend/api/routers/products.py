@@ -13,6 +13,7 @@ from sqlmodel import Session, col, desc, func, or_, select
 
 from web_ban_hang_backend.core.auth import CurrentUser
 from web_ban_hang_backend.core.database import SessionDep
+# from web_ban_hang_backend.core.deps import ModelStateDep
 from web_ban_hang_backend.core.deps import ModelStateDep
 from web_ban_hang_backend.models.order import Order, OrderStatus
 from web_ban_hang_backend.models.order_item import OrderItem
@@ -66,7 +67,6 @@ def get_own_review(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy đánh giá")
     return review
 
-# --- CÁC ROUTE TÌM KIẾM & LỌC (MỚI & ĐƯỢC CẬP NHẬT) ---
 def paginate_ranked_products(
     session: Session,
     product_ids: list[UUID],
@@ -114,6 +114,7 @@ def get_all_products(
         query = query.where(Product.price >= min_price)
     if max_price is not None:
         query = query.where(Product.price <= max_price)
+    
     discounted = Product.original_price.is_not(None) & (
         Product.original_price > Product.price
     )
@@ -127,7 +128,9 @@ def get_all_products(
             )
         )
 
-    if sort == "price_asc":
+    if sort == "best_selling":
+        query = query.order_by(col(Product.sold_count).desc())
+    elif sort == "price_asc":
         query = query.order_by(col(Product.price).asc())
     elif sort == "price_desc":
         query = query.order_by(col(Product.price).desc())

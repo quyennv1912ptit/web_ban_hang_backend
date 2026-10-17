@@ -4,12 +4,11 @@ from uuid import UUID, uuid4
 from sqlalchemy import CheckConstraint, DateTime, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
-
 class CartItem(SQLModel, table=True):
     __tablename__ = "cart_items"  # pyright: ignore[reportAssignmentType]
     __table_args__ = (
-        UniqueConstraint("cart_id", "product_id", name="cart_items_cart_id_product_id_key"),
         CheckConstraint("quantity > 0", name="cart_items_quantity_check"),
+        UniqueConstraint("cart_id", "product_id", name="cart_items_cart_id_product_id_key"),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)

@@ -31,7 +31,6 @@ cloudinary.config(
 
 logger = logging.getLogger(__name__)
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.model_state = None

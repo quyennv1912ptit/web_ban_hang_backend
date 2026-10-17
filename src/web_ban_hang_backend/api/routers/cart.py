@@ -17,15 +17,12 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-
 class CartItemCreate(BaseModel):
     product_id: UUID
     quantity: int = Field(default=1, ge=1, le=100)
 
-
 class CartItemUpdate(BaseModel):
     quantity: int = Field(ge=1, le=100)
-
 
 def get_user_cart(session: SessionDep, user_id: UUID, *, create: bool) -> Cart | None:
     cart = session.exec(
@@ -48,14 +45,13 @@ def get_user_cart(session: SessionDep, user_id: UUID, *, create: bool) -> Cart |
             raise
     return cart
 
-
 @router.get("/")
 def get_all_products_in_cart(current_user: CurrentUser, session: SessionDep):
+    """Lấy các sản phẩm trong giỏ"""
     cart = get_user_cart(session, current_user.id, create=False)
     if cart is None:
         return []
     return session.exec(select(CartItem).where(CartItem.cart_id == cart.id)).all()
-
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
 def add_products_to_cart(
@@ -63,10 +59,7 @@ def add_products_to_cart(
 ):
     product = session.get(Product, data.product_id)
     if not product or not product.is_active:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Sản phẩm không tồn tại hoặc đã ngừng bán",
-        )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Sản phẩm không tồn tại hoặc đã ngừng bán")
 
     cart = get_user_cart(session, current_user.id, create=True)
     assert cart is not None
@@ -78,26 +71,20 @@ def add_products_to_cart(
     ).first()
 
     new_quantity = item.quantity + data.quantity if item else data.quantity
-    if new_quantity > product.stock_quantity:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Vượt quá số lượng tồn kho của sản phẩm",
-        )
+    
+    stock = product.stock_quantity
+    if new_quantity > stock:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Vượt quá số lượng tồn kho (Còn {stock} sản phẩm)")
 
     if item:
         item.quantity = new_quantity
     else:
-        item = CartItem(
-            cart_id=cart.id,
-            product_id=data.product_id,
-            quantity=data.quantity,
-        )
+        item = CartItem(cart_id=cart.id, product_id=data.product_id, quantity=data.quantity)
         session.add(item)
 
     session.commit()
     session.refresh(item)
     return item
-
 
 @router.put("/{product_id}")
 def update_products_in_cart(
@@ -106,9 +93,10 @@ def update_products_in_cart(
     current_user: CurrentUser,
     session: SessionDep,
 ):
+    """Đổi số lượng, kiểm tra tồn kho."""
     cart = get_user_cart(session, current_user.id, create=False)
     if cart is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Sản phẩm không có trong giỏ hàng")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Giỏ hàng trống")
 
     item = session.exec(
         select(CartItem).where(
@@ -121,26 +109,22 @@ def update_products_in_cart(
 
     product = session.get(Product, product_id)
     if not product or not product.is_active:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Sản phẩm không tồn tại hoặc đã ngừng bán",
-        )
-    if data.quantity > product.stock_quantity:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Sản phẩm không đủ số lượng tồn kho",
-        )
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Sản phẩm không tồn tại hoặc đã ngừng bán")
+        
+    stock = product.stock_quantity
+    if data.quantity > stock:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Sản phẩm không đủ số lượng tồn kho")
 
     item.quantity = data.quantity
     session.commit()
     session.refresh(item)
     return item
 
-
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_products_from_cart(
     product_id: UUID, current_user: CurrentUser, session: SessionDep
 ):
+    """Xóa một sản phẩm khỏi giỏ."""
     cart = get_user_cart(session, current_user.id, create=False)
     if cart is None:
         return
@@ -154,9 +138,9 @@ def delete_products_from_cart(
         session.delete(item)
         session.commit()
 
-
 @router.delete("/", status_code=status.HTTP_204_NO_CONTENT)
 def clear_cart(current_user: CurrentUser, session: SessionDep):
+    """Xóa toàn bộ giỏ hàng, gọi sau khi đặt hàng thành công."""
     cart = get_user_cart(session, current_user.id, create=False)
     if cart is None:
         return

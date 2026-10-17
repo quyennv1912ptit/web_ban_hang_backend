@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from sqlalchemy import CheckConstraint, DateTime, text
 from sqlmodel import Field, SQLModel
 
-
 class User(SQLModel, table=True):
     __tablename__ = "users"  # pyright: ignore[reportAssignmentType]
     __table_args__ = (

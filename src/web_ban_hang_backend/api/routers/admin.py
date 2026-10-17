@@ -1,7 +1,8 @@
+from decimal import Decimal
 import hashlib
 import logging
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 from uuid import UUID, uuid4
 
 from cloudinary import uploader
@@ -13,9 +14,10 @@ from slugify import slugify
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import func, select
 
+
 from web_ban_hang_backend.api.routers.products import refresh_product_rating
 from web_ban_hang_backend.schemas.user import UserStatusUpdate
-from web_ban_hang_backend.core.auth import AdminUser
+from web_ban_hang_backend.core.auth import get_admin_user
 from web_ban_hang_backend.core.database import SessionDep
 from web_ban_hang_backend.core.deps import ModelStateDep
 from web_ban_hang_backend.models.category import Category
@@ -44,7 +46,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/admin",
     tags=["Admin"],
-    dependencies=[Depends(AdminUser)],
+    dependencies=[Depends(get_admin_user)],
     responses={404: {"description": "Not found"}},
 )
 
@@ -57,6 +59,18 @@ def delete_cloud_images(storage_keys: list[str | None]) -> None:
             uploader.destroy(key)
         except Exception:
             logger.exception("Không xóa được ảnh %s trên cloud, cần dọn thủ công", key)
+
+class CategoryCreate(BaseModel):
+    name: str
+    slug: str
+    parent_id: Optional[int] = None
+    icon: Optional[str] = None
+
+class OrderStatusUpdate(BaseModel):
+    status: OrderStatus
+
+class UserRoleUpdate(BaseModel):
+    role: Literal["customer", "admin"]
 
 
 # Quản lý sản phẩm
@@ -458,6 +472,7 @@ def update_order_status(order_id: UUID, data: OrderStatusUpdate, session: Sessio
             status.HTTP_400_BAD_REQUEST,
             "Không thể cập nhật trạng thái đơn hàng. Vui lòng thử lại!",
         )
+
     session.refresh(order)
     return order
 
@@ -469,7 +484,7 @@ def get_all_users(session: SessionDep):
     return paginate(session, select(User).order_by(User.created_at.desc()))
 
 
-@router.patch("/users/{user_id}")
+@router.patch("/users/{user_id}/status")
 def update_user_status(user_id: UUID, data: UserStatusUpdate, session: SessionDep):
     """Khóa hoặc mở khóa tài khoản người dùng."""
     user = session.get(User, user_id)
@@ -481,6 +496,20 @@ def update_user_status(user_id: UUID, data: UserStatusUpdate, session: SessionDe
     session.commit()
     session.refresh(user)
     return {"message": "Đã cập nhật trạng thái người dùng", "is_active": user.is_active}
+
+
+@router.patch("/users/{user_id}/role")
+def update_user_role(user_id: UUID, data: UserRoleUpdate, session: SessionDep):
+    """Cập nhật vai trò người dùng."""
+    user = session.get(User, user_id)
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Không tìm thấy người dùng")
+    
+    user.role = data.role
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return {"message": "Đã cập nhật vai trò người dùng", "role": user.role}
 
 
 # QUẢN LÝ ĐÁNH GIÁ (Reviews)
@@ -515,7 +544,8 @@ def get_analytics(session: SessionDep):
     total_users = session.exec(select(func.count(User.id))).one()
     total_products = session.exec(select(func.count(Product.id))).one()
     total_orders = session.exec(select(func.count(Order.id))).one()
-
+    
+    # Tính tổng doanh thu từ các đơn hàng đã giao.
     total_revenue_result = session.exec(
         select(func.sum(Order.total_amount)).where(Order.status == OrderStatus.DELIVERED.value)
     ).one()
