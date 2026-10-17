@@ -329,7 +329,7 @@ def get_admin_categories(session: SessionDep):
 
 @router.post("/categories", response_model=Category, status_code=status.HTTP_201_CREATED)
 def create_category(data: CategoryCreate, session: SessionDep):
-    category = Category(**data.model_dump(), slug=slugify(data.name))
+    category = Category(**data.model_dump(exclude={"slug"}), slug=slugify(data.name))
     session.add(category)
     try:
         session.commit()
