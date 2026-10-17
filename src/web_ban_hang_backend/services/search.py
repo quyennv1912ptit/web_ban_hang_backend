@@ -4,7 +4,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from PIL import Image
-from sqlmodel import select, func
+from sqlmodel import select, func, or_
 
 from web_ban_hang_backend.models.product import Product
 from web_ban_hang_backend.models.product_image import ProductImage
@@ -41,10 +41,14 @@ def execute_hybrid_search(
     category_id: Optional[int],
     min_price: Optional[Decimal],
     max_price: Optional[Decimal],
+    is_active: Optional[bool] = True,
+    on_sale: Optional[bool] = None,
 ) -> List[UUID]:
     rankings: List[List[UUID]] = []
 
-    product_filters = [Product.is_active.is_(True)]
+    product_filters = []
+    if is_active is not None:
+        product_filters.append(Product.is_active.is_(is_active))
 
     if category_id is not None:
         product_filters.append(Product.category_id == category_id)
@@ -54,6 +58,12 @@ def execute_hybrid_search(
 
     if max_price is not None:
         product_filters.append(Product.price <= max_price)
+
+    discounted = Product.original_price.is_not(None) & (Product.original_price > Product.price)
+    if on_sale is True:
+        product_filters.append(discounted)
+    elif on_sale is False:
+        product_filters.append(or_(Product.original_price.is_(None), Product.original_price <= Product.price))
 
     query = q.strip() if q else ""
     model_ready = getattr(model_state, "ready", False)
