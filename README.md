@@ -15,23 +15,6 @@ Thanh toán VNPay/Momo và webhook chưa được tích hợp. Endpoint thanh to
 - BGE-M3 và JinaCLIP v2 cho tìm kiếm văn bản và ảnh; lần chạy đầu tải model từ Hugging Face.
 - `uv` để quản lý môi trường và cài đặt dependency theo `uv.lock`.
 
-## Cấu trúc chính
-
-```text
-.
-├── src/web_ban_hang_backend/
-│   ├── api/routers/  # Các nhóm endpoint FastAPI
-│   ├── core/         # Kết nối database, Firebase, auth và dependency
-│   ├── models/       # Model SQLModel ánh xạ bảng PostgreSQL
-│   ├── schemas/      # Schema request/response
-│   ├── services/     # Tìm kiếm, embedding và xử lý ảnh
-│   ├── config.py     # Đọc cấu hình từ .env
-│   └── main.py       # Khởi tạo FastAPI, middleware và router
-├── db.sql            # Cấu trúc bảng và index PostgreSQL
-├── pyproject.toml    # Python version và dependency
-└── uv.lock           # Phiên bản dependency đã khóa
-```
-
 ## Cài đặt và chạy
 
 Clone repository về máy, sau đó mở PowerShell tại thư mục gốc (thư mục có `pyproject.toml`). Các lệnh bên dưới giả định đang chạy từ thư mục này.
@@ -115,6 +98,137 @@ Sau khi server khởi động, mở [http://127.0.0.1:8000/docs](http://127.0.0.
 
 Nếu log báo không nạp được model, server vẫn có thể chạy các API không cần model, nhưng các endpoint tìm kiếm văn bản/ảnh trả `503` cho đến khi model được tải thành công. Nếu ứng dụng không khởi động, trước tiên kiểm tra các biến trong `.env`, đường dẫn Firebase JSON, kết nối PostgreSQL và việc đã cài `pgvector` trên PostgreSQL.
 
+## Sơ đồ hệ thống
+
+### Kiến trúc tổng quan
+
+Client đăng ký/đăng nhập trực tiếp với Firebase Authentication, sau đó gửi Firebase ID token đến API. FastAPI xác thực token bằng Firebase Admin SDK, gọi model tìm kiếm khi cần và đọc/ghi dữ liệu trong PostgreSQL. BGE-M3 và JinaCLIP v2 được nạp trong tiến trình backend; `pgvector` lưu embedding để truy vấn tương đồng.
+
+```mermaid
+flowchart LR
+    Client["Client web / mobile"]
+    Firebase["Firebase Authentication"]
+    API["FastAPI backend"]
+    Models["Model ML<br/>BGE-M3 · JinaCLIP v2"]
+    DB[("PostgreSQL<br/>pgvector")]
+    Cloudinary["Cloudinary<br/>ảnh sản phẩm"]
+
+    Client -->|Đăng ký / đăng nhập| Firebase
+    Firebase -->|Firebase ID token| Client
+    Client -->|HTTPS API · Bearer token| API
+    API -->|Firebase Admin SDK<br/>xác thực ID token| Firebase
+    API -->|Inference embedding<br/>trong tiến trình backend| Models
+    Models -->|Vector 1024 chiều| API
+    API -->|SQL và truy vấn vector| DB
+    API -->|Upload / xóa ảnh| Cloudinary
+```
+
+### ERD — các thực thể và quan hệ chính
+
+ERD dưới đây rút gọn các cột để tập trung vào khóa, quan hệ và dữ liệu quan trọng. Hai trường embedding đang lưu ở `products.semantic_embedding` và `product_images.multimodal_embedding`, mỗi vector có 1024 chiều. Quan hệ nhiều-nhiều giữa người dùng và sản phẩm được triển khai qua `user_favorites`; giỏ hàng và đơn hàng dùng các bảng dòng (`cart_items`, `order_items`) làm bảng liên kết.
+
+```mermaid
+erDiagram
+    USERS {
+        uuid id PK
+        string firebase_uid UK
+        string email
+        string display_name
+        string role
+        boolean is_active
+    }
+    CATEGORIES {
+        int id PK
+        int parent_id FK
+        string name
+        string slug UK
+    }
+    PRODUCTS {
+        uuid id PK
+        int category_id FK
+        string name
+        string slug UK
+        numeric price
+        vector semantic_embedding
+        tsvector search_vector
+    }
+    PRODUCT_IMAGES {
+        uuid id PK
+        uuid product_id FK
+        string image_url
+        vector multimodal_embedding
+        string embedding_status
+    }
+    CARTS {
+        uuid id PK
+        uuid user_id FK, UK
+    }
+    CART_ITEMS {
+        uuid id PK
+        uuid cart_id FK
+        uuid product_id FK
+        int quantity
+    }
+    USER_FAVORITES {
+        uuid user_id PK, FK
+        uuid product_id PK, FK
+    }
+    USER_ADDRESSES {
+        uuid id PK
+        uuid user_id FK
+        string receiver_name
+        string phone
+        string address_line
+    }
+    ORDERS {
+        uuid id PK
+        uuid user_id FK
+        uuid address_id FK
+        numeric total_amount
+        string status
+    }
+    ORDER_ITEMS {
+        uuid id PK
+        uuid order_id FK
+        uuid product_id FK
+        string product_name
+        int quantity
+        numeric price
+    }
+    PAYMENTS {
+        uuid id PK
+        uuid order_id FK, UK
+        string payment_method
+        string status
+        numeric amount
+    }
+    REVIEWS {
+        uuid id PK
+        uuid user_id FK
+        uuid product_id FK
+        uuid order_id FK
+        int rating
+    }
+
+    USERS ||--o| CARTS : owns
+    CARTS ||--o{ CART_ITEMS : contains
+    PRODUCTS ||--o{ CART_ITEMS : added_to
+    USERS ||--o{ USER_FAVORITES : saves
+    PRODUCTS ||--o{ USER_FAVORITES : is_favorited
+    CATEGORIES o|--o{ CATEGORIES : parent_of
+    CATEGORIES o|--o{ PRODUCTS : categorizes
+    PRODUCTS ||--o{ PRODUCT_IMAGES : has
+    USERS ||--o{ USER_ADDRESSES : has
+    USERS ||--o{ ORDERS : places
+    USER_ADDRESSES o|--o{ ORDERS : ships_to
+    ORDERS ||--o{ ORDER_ITEMS : contains
+    PRODUCTS o|--o{ ORDER_ITEMS : referenced_by
+    ORDERS ||--o| PAYMENTS : paid_by
+    USERS ||--o{ REVIEWS : writes
+    PRODUCTS ||--o{ REVIEWS : receives
+    ORDERS o|--o{ REVIEWS : associated_with
+```
+
 ## Danh sách API và chức năng
 
 ### 1. Người dùng (Users & Auth)
@@ -149,6 +263,39 @@ Nếu log báo không nạp được model, server vẫn có thể chạy các A
 * **`PATCH`** `/api/admin/orders/{id}/status` - Cập nhật trạng thái đơn hàng (Đang giao, Hoàn thành...).
 * **`GET`** `/api/admin/analytics` - Lấy thống kê doanh thu, số đơn bán ra.
 
+### Luồng đăng ký, đăng nhập và đồng bộ profile
+
+Firebase xử lý xác thực tài khoản và cấp ID token. Endpoint `POST /api/users/sync` tạo bản ghi `users` khi `firebase_uid` chưa tồn tại; nếu đã có, backend trả hồ sơ hiện có. `GET /api/users/me` đọc profile trong PostgreSQL và `PUT /api/users/me` cập nhật các trường hồ sơ được hỗ trợ.
+
+```mermaid
+flowchart TD
+    User["Người dùng"] --> Choice{"Đăng ký hay đăng nhập?"}
+    Choice -->|Đăng ký| SignUp["Client tạo tài khoản với Firebase"]
+    Choice -->|Đăng nhập| SignIn["Client đăng nhập với Firebase"]
+    SignUp --> Auth["Firebase Authentication"]
+    SignIn --> Auth
+    Auth -->|Thành công: cấp ID token| Client["Client nhận token"]
+    Auth -->|Thất bại| AuthError["Hiển thị lỗi xác thực"]
+    Client -->|POST /api/users/sync<br/>Bearer token + profile tùy chọn| Sync["FastAPI xác thực token<br/>bằng Firebase Admin SDK"]
+    Sync --> Valid{"Token hợp lệ?"}
+    Valid -->|Không| Unauthorized["401 Unauthorized"]
+    Valid -->|Có| Lookup["Tìm users theo firebase_uid"]
+    Lookup --> Exists{"Đã có user?"}
+    Exists -->|Chưa| Create["Tạo users<br/>role mặc định customer"]
+    Exists -->|Rồi| Active{"Tài khoản đang hoạt động?"}
+    Active -->|Không| Forbidden["403 Tài khoản bị khóa"]
+    Active -->|Có| Existing["Giữ profile PostgreSQL hiện có"]
+    Create --> Synced["Trả UserRead"]
+    Existing --> Synced
+    Synced -->|GET /api/users/me| GetProfile["Đọc profile hiện tại"]
+    GetProfile --> Edit{"Có chỉnh sửa profile?"}
+    Edit -->|Không| Response["Trả profile cho client"]
+    Edit -->|Có · PUT /api/users/me| UpdateProfile["Cập nhật display_name,<br/>phone_number, photo_url"]
+    UpdateProfile -->|Commit PostgreSQL| Response
+```
+
+Khi tạo user lần đầu, email/tên/ảnh được lấy từ token Firebase và tên/số điện thoại có thể được cung cấp trong request sync. Với user đã tồn tại, `/sync` không ghi đè các trường profile; việc sửa tên, số điện thoại hoặc ảnh thực hiện qua `PUT /api/users/me`.
+
 ### 7. Pipeline tìm kiếm sản phẩm bằng văn bản và hình ảnh
 
 #### 7.1. Quy tắc chung
@@ -163,8 +310,9 @@ Pipeline dùng hai model và hai không gian vector độc lập ([model card BG
 - Cả hai loại vector có 1024 chiều, được chuẩn hóa L2 và so sánh bằng cosine. Tạo HNSW index với `vector_cosine_ops` cho từng cột vector.
 - Không bao giờ so sánh hoặc cộng trực tiếp vector BGE-M3 với vector JinaCLIP. Chỉ gộp thứ hạng kết quả của các kênh độc lập.
 - Ảnh sản phẩm và ảnh truy vấn dùng cùng tiền xử lý: giải mã ảnh, chuyển RGB và thống nhất dùng ảnh gốc hoặc cùng quy tắc crop.
-- Embedding sản phẩm được tính khi admin tạo/sửa sản phẩm. Embedding truy vấn chỉ được tính khi có yêu cầu tìm kiếm.
-- Nạp hai model đúng một lần trong FastAPI lifespan. Nếu model chưa sẵn sàng, endpoint cần model trả `503`.
+- Backend thử tính embedding sản phẩm khi admin tạo/sửa sản phẩm; embedding truy vấn chỉ được tính khi có yêu cầu tìm kiếm.
+- FastAPI lifespan nạp hai model một lần bằng `asyncio.to_thread`. Nếu nạp lỗi, ứng dụng vẫn khởi động với trạng thái model chưa sẵn sàng; các endpoint tìm kiếm hiện kiểm tra trạng thái và trả `503`.
+- Route tạo/sửa sản phẩm không trả `503` khi model chưa sẵn sàng: backend lưu sản phẩm và bỏ qua việc tạo embedding mới. Upload ảnh vẫn tiếp tục và lưu ảnh với `embedding_status = 'pending'`.
 
 Ví dụ khai báo index trong migration PostgreSQL:
 
@@ -180,40 +328,40 @@ CREATE INDEX ix_product_images_multimodal_embedding_hnsw
 
 **Sản phẩm — `POST /api/admin/products` và cập nhật sản phẩm**
 
-1. Admin gửi dữ liệu; backend kiểm tra hợp lệ rồi lưu bản ghi vào `products`.
-2. Dựng văn bản ổn định từ các trường tìm kiếm, ví dụ `Tên: ... Mô tả: ... Màu sắc: ...`, rồi tính hash của chuỗi đó.
-3. Chỉ khi hash khác `embedding_text_hash` (hoặc model lưu hiện tại đã cũ), gọi BGE-M3. Chuẩn hóa vector và ghi `semantic_embedding`, `embedding_model`, `embedding_text_hash`, `embedding_updated_at`.
-4. Nếu nội dung không đổi và model vẫn hiện hành, giữ vector hiện có, không gọi lại BGE-M3.
+1. FastAPI kiểm tra `ProductCreate`; dữ liệu không hợp lệ trả `422`.
+2. Dựng văn bản từ `name`, `description` và `attributes` (theo thứ tự khóa ổn định, bỏ giá trị rỗng), rồi tính SHA-256.
+3. Nếu vector hiện có cùng hash và model `BGE-m3@1024` vẫn hiện hành, giữ vector. Nếu cần làm mới và model sẵn sàng, gọi BGE-M3; khi thành công cập nhật `semantic_embedding`, `embedding_model`, `embedding_text_hash`, `embedding_updated_at`.
+4. Nếu model chưa sẵn sàng hoặc encode lỗi, request vẫn tiếp tục lưu sản phẩm. Encode lỗi được ghi log; schema hiện không có trạng thái reindex riêng cho embedding sản phẩm. Khi cập nhật, vector cũ có thể vẫn còn dù nội dung mới đã thay đổi.
+5. Route là hàm đồng bộ; FastAPI chạy handler và thao tác encode trong threadpool.
 
 **Ảnh — `POST /api/admin/products/{id}/images`**
 
-1. Kiểm tra giới hạn dung lượng, giải mã ảnh thật (không tin tên file hoặc MIME do client gửi) và chuyển ảnh sang RGB.
-2. Khi model sẵn sàng, gọi JinaCLIP image encoder với cùng tiền xử lý như ảnh truy vấn và chuẩn hóa vector 1024 chiều.
-3. Upload ảnh lên Cloudinary; lưu URL trong `image_url` và khóa file trong `storage_key`.
-4. Ghi `product_images` cùng model và trạng thái embedding. Nếu model chưa sẵn sàng, ảnh được lưu ở trạng thái `pending`.
-5. Nếu encode lỗi, vẫn lưu ảnh với `embedding_status = 'failed'` và `embedding_error`.
-6. Nếu ghi DB lỗi sau khi upload, xóa file vừa upload theo `storage_key`.
+1. Kiểm tra sản phẩm tồn tại; sau đó giới hạn file 10 MB, giải mã nội dung JPEG/PNG/WEBP và chuyển sang RGB. Lỗi ảnh trả `400`, `413` hoặc `415` tùy nguyên nhân.
+2. Nếu model sẵn sàng, gọi JinaCLIP image encoder và chuẩn hóa vector 1024 chiều. Nếu chưa sẵn sàng, giữ trạng thái `pending`; nếu encode lỗi, đặt `failed` và lưu thông tin lỗi.
+3. Upload ảnh lên Cloudinary, rồi ghi `product_images.image_url`, `storage_key` cùng vector và trạng thái tương ứng. Route này không trả `503` chỉ vì model chưa sẵn sàng.
+4. Nếu upload thất bại, trả `502`. Nếu ghi DB thất bại sau khi upload, rollback và xóa file vừa tải lên theo `storage_key`.
+5. Route là hàm đồng bộ; FastAPI chạy handler và encode trong threadpool.
 
-Giai đoạn đầu, thực hiện đồng bộ trong request để đơn giản. Khi thời gian xử lý trở thành vấn đề, chuyển công việc embedding sang `BackgroundTasks` hoặc worker. Một job backfill/retry cần quét ảnh có `embedding_status <> 'indexed'` và sản phẩm có hash lệch hoặc `embedding_model` cũ.
+Hiện chưa có endpoint `/api/admin/reindex` hoặc job nền để chạy lại embedding. Ảnh `pending`/`failed` không tự được thử lại; cần xóa và tải lại ảnh hoặc bổ sung job reindex. Embedding sản phẩm thiếu/cũ cũng không tự được tạo lại, nhưng có thể kích hoạt lại bằng thao tác cập nhật sản phẩm khi model sẵn sàng. Khi xóa sản phẩm hoặc ảnh, backend commit xóa dòng DB trước rồi gọi Cloudinary xóa file; nếu xóa file lỗi, backend ghi log để dọn thủ công.
 
 #### 7.3. Tìm kiếm và hợp nhất kết quả
 
-Có bốn kênh tìm kiếm. Mỗi kênh lấy khoảng 50 ứng viên sau khi áp dụng `is_active`, category và khoảng giá:
+Có bốn kênh tìm kiếm. Mỗi kênh lấy tối đa 50 sản phẩm sau khi áp dụng các bộ lọc phù hợp (`is_active`, category, khoảng giá; tìm kiếm admin còn hỗ trợ lọc khuyến mãi):
 
 | Kênh | Đầu vào | Model/phép tìm | So với |
 | --- | --- | --- | --- |
 | A | Ảnh truy vấn | JinaCLIP image encoder | `product_images.multimodal_embedding` |
 | B | Chữ truy vấn | JinaCLIP text encoder | `product_images.multimodal_embedding` |
 | C | Chữ truy vấn | BGE-M3 | `products.semantic_embedding` |
-| D | Chữ truy vấn | `plainto_tsquery` (tùy chọn) | `products.search_vector` |
+| D | Chữ truy vấn | `websearch_to_tsquery` (luôn chạy khi có chữ) | `products.search_vector` |
 
 Chọn kênh theo loại yêu cầu:
 
 - Chỉ ảnh (`POST /api/products/search/image` không có `q`): A.
-- Ảnh kèm chữ: A, B, C; thêm D nếu bật tìm kiếm full-text.
-- Chỉ chữ (`GET /api/products/search` hoặc endpoint tìm kiếm chữ khác): B, C, D.
+- Ảnh kèm chữ: A, B, C, D.
+- Chỉ chữ (`GET /api/products/search`): B, C, D.
 
-Ở kênh A và B, một sản phẩm có thể có nhiều ảnh. Trước khi xếp hạng sản phẩm, gom kết quả ảnh về một dòng cho mỗi `product_id` bằng cách giữ ảnh giống nhất, chẳng hạn `DISTINCT ON (product_id)` hoặc `MIN(distance) GROUP BY product_id`.
+Kênh A và B thực hiện `GROUP BY product_id`, sắp xếp theo khoảng cách nhỏ nhất (`MIN(distance)`) của ảnh thuộc sản phẩm, rồi lấy tối đa 50 sản phẩm. Kênh C và D cũng lấy tối đa 50 sản phẩm. D chạy cho mọi truy vấn có chữ; code dùng `websearch_to_tsquery`, không có cờ bật/tắt riêng.
 
 Gộp thứ hạng các kênh bằng Reciprocal Rank Fusion (RRF):
 
@@ -226,70 +374,101 @@ def rrf(rankings: list[list[str]], k: int = 60) -> list[str]:
     return sorted(scores, key=scores.get, reverse=True)
 ```
 
-Phân trang sau khi gộp: lấy khoảng top 100 sản phẩm theo RRF rồi mới cắt trang. Cuối cùng join `products` và trả sản phẩm, ảnh khớp nhất cùng điểm nếu muốn công khai điểm.
+Phân trang sau khi gộp: giữ tối đa top 100 product ID theo RRF rồi mới phân trang và nạp các bản ghi `ProductRead`. Response có danh sách ảnh của sản phẩm nhưng hiện không trả riêng ảnh khớp nhất hoặc điểm tương đồng.
 
 #### 7.4. Sơ đồ pipeline
 
 ```mermaid
 flowchart TD
     subgraph Models["Vòng đời model"]
-        Start["FastAPI lifespan"] --> Load["Nạp BGE-M3 và JinaCLIP một lần"]
-        Load --> Ready{"Model sẵn sàng?"}
-        Ready -- "Chưa" --> E503["Endpoint cần model trả 503"]
+        Start["FastAPI lifespan"] --> Load["Nạp BGE-M3 và JinaCLIP một lần<br/>asyncio.to_thread"]
+        Load -->|Thành công| Ready["model_state.ready = true"]
+        Load -. "Lỗi; API vẫn khởi động" .-> NotReady["model_state = None"]
     end
 
-    subgraph Admin["Admin lập chỉ mục — xử lý đồng bộ ban đầu"]
-        P["POST /api/admin/products hoặc cập nhật"] --> PV["Validate và lưu products"]
-        PV --> Text["Dựng Tên / Mô tả / Màu sắc và tính hash"]
-        Text --> Hash{"Hash khác hoặc model cũ?"}
-        Hash -- "Có" --> BGE["BGE-M3 → normalize 1024"]
-        BGE --> PVec["Lưu semantic_embedding, model, hash, updated_at"]
-        Hash -- "Không" --> Keep["Giữ embedding hiện có"]
+    subgraph Admin["Admin lập chỉ mục — route đồng bộ, chạy trong threadpool"]
+        P["POST /api/admin/products<br/>hoặc PUT /api/admin/products/{id}"] --> PV{"ProductCreate hợp lệ?"}
+        PV -->|Không| E422A["422 dữ liệu sản phẩm sai"]
+        PV -->|Có| Text["Dựng text từ name, description,<br/>attributes; tính SHA-256"]
+        Text --> Hash{"Vector đúng hash<br/>và model hiện hành?"}
+        Hash -->|Có| Keep["Giữ embedding hiện có"]
+        Hash -->|Không| PReady{"Model sẵn sàng?"}
+        Ready --> PReady
+        NotReady --> PReady
+        PReady -->|Có| BGE["BGE-M3 encode<br/>normalize 1024"]
+        PReady -->|Chưa| PSkip["Bỏ encode; tiếp tục lưu"]
+        BGE -->|Thành công| PVec["Cập nhật semantic_embedding,<br/>model, hash, updated_at"]
+        BGE -. "Encode lỗi: log và tiếp tục" .-> PFail["Không cập nhật embedding mới"]
+        Keep --> SaveProduct["Commit products"]
+        PSkip --> SaveProduct
+        PVec --> SaveProduct
+        PFail --> SaveProduct
+        SaveProduct --> ProductOK["Trả ProductRead<br/>201 tạo mới / 200 cập nhật"]
 
-        I["POST /api/admin/products/{id}/images"] --> Check["Giới hạn dung lượng, giải mã thật, RGB"]
-        Check --> Store["Upload storage → original_url + storage_key"]
-        Store --> JImg["JinaCLIP image → normalize 1024"]
-        JImg --> IRow["Ghi product_images với status indexed"]
-        JImg -. "Encode lỗi" .-> Failed["Ghi status failed + embedding_error"]
-        IRow -. "Ghi DB lỗi" .-> Cleanup["Xóa file theo storage_key"]
-        Failed -. "Ghi DB lỗi" .-> Cleanup
+        I["POST /api/admin/products/{id}/images"] --> Exists{"Sản phẩm tồn tại?"}
+        Exists -->|Không| E404I["404 không tìm thấy sản phẩm"]
+        Exists -->|Có| Check["Giới hạn 10 MB, giải mã JPEG/PNG/WEBP,<br/>chuyển RGB"]
+        Check --> ImageValid{"Ảnh hợp lệ?"}
+        ImageValid -->|Không| EImage["400 / 413 / 415"]
+        ImageValid -->|Có| IReady{"Model sẵn sàng?"}
+        Ready --> IReady
+        NotReady --> IReady
+        IReady -->|Có| JImg["JinaCLIP image encode<br/>normalize 1024"]
+        IReady -->|Chưa| Pending["embedding_status = pending"]
+        JImg -->|Thành công| Indexed["embedding_status = indexed"]
+        JImg -. "Encode lỗi" .-> Failed["embedding_status = failed<br/>lưu embedding_error"]
+        Indexed --> Upload["Upload ảnh lên Cloudinary"]
+        Pending --> Upload
+        Failed --> Upload
+        Upload --> UploadOK{"Upload thành công?"}
+        UploadOK -->|Không| E502["502 upload thất bại"]
+        UploadOK -->|Có| IRow["Ghi product_images:<br/>image_url, storage_key, vector, status"]
+        IRow -->|Commit thành công| IOK["Trả ProductImageRead"]
+        IRow -. "Ghi DB lỗi" .-> Cleanup["Rollback và xóa file Cloudinary<br/>theo storage_key"]
+
+        Del["DELETE sản phẩm hoặc ảnh"] --> DelDB["Commit xóa dòng DB<br/>xóa sản phẩm sẽ cascade ảnh"]
+        DelDB --> DelFile["Xóa file Cloudinary<br/>theo storage_key"]
+        DelFile -. "Xóa file lỗi" .-> DelLog["Ghi log; cần dọn thủ công"]
     end
 
     subgraph Search["Tìm kiếm"]
-        Req["Request: ảnh và/hoặc q"] --> Gate{"Model sẵn sàng?"}
-        Gate -- "Chưa" --> E503
-        Gate -- "Có" --> Kind{"Có ảnh? Có chữ?"}
-        Kind -- "Ảnh" --> QImg["JinaCLIP image encoder"]
-        Kind -- "Ảnh + chữ" --> QImg
-        QImg --> A["A · ảnh → product_images"]
-        Kind -- "Chữ" --> QJText["JinaCLIP text encoder"]
-        Kind -- "Ảnh + chữ" --> QJText
-        QJText --> B["B · chữ → product_images"]
-        Kind -- "Chữ" --> QBGE["BGE-M3 text encoder"]
-        Kind -- "Ảnh + chữ" --> QBGE
-        QBGE --> C["C · chữ → products"]
-        Kind -- "Chữ + D bật" --> D["D · plainto_tsquery → search_vector"]
-        Kind -- "Ảnh + chữ + D bật" --> D
-        A --> Filter["Mỗi kênh: khoảng 50 ứng viên; is_active, category, giá"]
-        B --> Filter
-        C --> Filter
-        D --> Filter
-        Filter --> Group["A/B: gom theo product_id, giữ ảnh gần nhất"]
-        Group --> RRF["RRF hợp nhất thứ hạng"]
-        RRF --> Page["Giữ top 100 rồi phân trang"]
-        Page --> Result["Join products; trả ảnh khớp nhất và điểm tùy chọn"]
+        Req["GET /api/products/search?q<br/>POST /api/products/search/image (file; q tùy chọn)<br/>Admin cũng có POST tìm bằng ảnh"] --> Gate{"Model sẵn sàng?"}
+        Ready --> Gate
+        NotReady --> Gate
+        Gate -->|Chưa| E503["503 Service Unavailable"]
+        Gate -->|Có| Route{"Loại request?"}
+        Route -->|GET tìm bằng chữ| TextValid{"q sau trim có nội dung?"}
+        TextValid -->|Không| E422Q["422 từ khóa rỗng"]
+        TextValid -->|Có| QJText["JinaCLIP text encoder"]
+        Route -->|POST tìm bằng ảnh| Decode["Giải mã ảnh truy vấn, chuyển RGB"]
+        Decode -->|Ảnh không hợp lệ| EImageQ["400 / 413 / 415"]
+        Decode -->|Ảnh hợp lệ| QImg["JinaCLIP image encoder"]
+        QImg --> A["A · SQL trên product_images:<br/>lọc + GROUP BY product_id,<br/>MIN(distance), top 50"]
+        QImg --> HasImageText{"q ảnh có nội dung?"}
+        QJText --> B["B · SQL trên product_images:<br/>lọc + GROUP BY product_id,<br/>MIN(distance), top 50"]
+        HasImageText -->|Có| QJText
+        HasImageText -->|Có| QBGE["BGE-M3 text encoder"]
+        HasImageText -->|Có| D["D · SQL trên search_vector:<br/>websearch_to_tsquery, top 50"]
+        TextValid -->|Có| QBGE
+        TextValid -->|Có| D
+        QBGE --> C["C · SQL trên products.semantic_embedding,<br/>top 50"]
+        A --> RRF["RRF hợp nhất các kênh đang có"]
+        B --> RRF
+        C --> RRF
+        D --> RRF
+        RRF --> Page["Giữ tối đa top 100 product ID,<br/>sau đó phân trang"]
+        Page --> Result["Nạp ProductRead theo thứ hạng;<br/>không trả riêng ảnh khớp nhất hoặc điểm"]
     end
-
-    Ready -- "Có" --> Admin
-    Ready -- "Có" --> Search
 ```
+
+`GET /api/products/search` chạy các kênh B, C, D; tìm bằng ảnh không có `q` chỉ chạy A; ảnh kèm `q` chạy A, B, C, D. Kênh D luôn chạy khi có chữ, không có tùy chọn bật/tắt. Các truy vấn áp dụng bộ lọc sản phẩm tương ứng (`is_active`, category, khoảng giá; admin còn có khuyến mãi). Nếu encode văn bản lỗi, kênh đó được ghi log và bỏ qua; lỗi encode ảnh truy vấn được đẩy lên và không có fallback riêng. Hiện không có route/job reindex; embedding `pending`/`failed` hoặc bị cũ không tự động được tạo lại.
 
 #### 7.5. Ví dụ gửi ảnh truy vấn
 
 `POST /api/products/search/image` nhận `multipart/form-data` với field `file` và field `q` tùy chọn. Frontend gửi `Blob`/`File` trực tiếp trong `FormData`, không gửi base64 trong JSON:
 
 - Backend kiểm tra dung lượng và giải mã nội dung ảnh thật, chuyển RGB, rồi áp dụng đúng tiền xử lý ảnh đã dùng khi lập chỉ mục. Không tin tên file hoặc MIME client gửi.
-- Ảnh truy vấn được embed theo request và không lưu thành embedding sản phẩm. Nếu có `q`, chạy thêm các kênh chữ B và C (cùng D nếu bật); nếu không có ảnh thì dùng B, C, D.
+- Ảnh truy vấn được embed theo request và không lưu thành embedding sản phẩm. Endpoint ảnh yêu cầu field `file`; nếu có `q` không rỗng, chạy thêm B, C và D. Endpoint chữ riêng chạy B, C và D.
 
 ```javascript
 const form = new FormData();
@@ -304,4 +483,21 @@ const response = await fetch("/api/products/search/image", {
 ```
 
 Không tự đặt `Content-Type: multipart/form-data`; trình duyệt cần tự thêm multipart boundary.
+
+## Cấu trúc thư mục (tham khảo)
+
+```text
+.
+├── src/web_ban_hang_backend/
+│   ├── api/routers/  # Các nhóm endpoint FastAPI
+│   ├── core/         # Kết nối database, Firebase, auth và dependency
+│   ├── models/       # Model SQLModel ánh xạ bảng PostgreSQL
+│   ├── schemas/      # Schema request/response
+│   ├── services/     # Tìm kiếm, embedding và xử lý ảnh
+│   ├── config.py     # Đọc cấu hình từ .env
+│   └── main.py       # Khởi tạo FastAPI, middleware và router
+├── db.sql            # Cấu trúc bảng và index PostgreSQL
+├── pyproject.toml    # Python version và dependency
+└── uv.lock           # Phiên bản dependency đã khóa
+```
 
