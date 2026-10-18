@@ -15,6 +15,23 @@ Thanh toán VNPay/Momo và webhook chưa được tích hợp. Endpoint thanh to
 - BGE-M3 và JinaCLIP v2 cho tìm kiếm văn bản và ảnh; lần chạy đầu tải model từ Hugging Face.
 - `uv` để quản lý môi trường và cài đặt dependency theo `uv.lock`.
 
+## Cấu trúc thư mục
+
+```text
+.
+├── src/web_ban_hang_backend/
+│   ├── api/routers/  # Các nhóm endpoint FastAPI
+│   ├── core/         # Kết nối database, Firebase, auth và dependency
+│   ├── models/       # Model SQLModel ánh xạ bảng PostgreSQL
+│   ├── schemas/      # Schema request/response
+│   ├── services/     # Tìm kiếm, embedding và xử lý ảnh
+│   ├── config.py     # Đọc cấu hình từ .env
+│   └── main.py       # Khởi tạo FastAPI, middleware và router
+├── db.sql            # Cấu trúc bảng và index PostgreSQL
+├── pyproject.toml    # Python version và dependency
+└── uv.lock           # Phiên bản dependency đã khóa
+```
+
 ## Cài đặt và chạy
 
 Clone repository về máy, sau đó mở PowerShell tại thư mục gốc (thư mục có `pyproject.toml`). Các lệnh bên dưới giả định đang chạy từ thư mục này.
@@ -263,7 +280,7 @@ erDiagram
 * **`PATCH`** `/api/admin/orders/{id}/status` - Cập nhật trạng thái đơn hàng (Đang giao, Hoàn thành...).
 * **`GET`** `/api/admin/analytics` - Lấy thống kê doanh thu, số đơn bán ra.
 
-### Luồng đăng ký, đăng nhập và đồng bộ profile
+## Luồng đăng ký, đăng nhập và đồng bộ profile
 
 Firebase xử lý xác thực tài khoản và cấp ID token. Endpoint `POST /api/users/sync` tạo bản ghi `users` khi `firebase_uid` chưa tồn tại; nếu đã có, backend trả hồ sơ hiện có. `GET /api/users/me` đọc profile trong PostgreSQL và `PUT /api/users/me` cập nhật các trường hồ sơ được hỗ trợ.
 
@@ -296,9 +313,9 @@ flowchart TD
 
 Khi tạo user lần đầu, email/tên/ảnh được lấy từ token Firebase và tên/số điện thoại có thể được cung cấp trong request sync. Với user đã tồn tại, `/sync` không ghi đè các trường profile; việc sửa tên, số điện thoại hoặc ảnh thực hiện qua `PUT /api/users/me`.
 
-### 7. Pipeline tìm kiếm sản phẩm bằng văn bản và hình ảnh
+## Pipeline tìm kiếm sản phẩm bằng văn bản và hình ảnh
 
-#### 7.1. Quy tắc chung
+### Quy tắc chung
 
 Pipeline dùng hai model và hai không gian vector độc lập ([model card BGE-M3](https://huggingface.co/BAAI/bge-m3), [model card JinaCLIP v2](https://huggingface.co/jinaai/jina-clip-v2)):
 
@@ -324,7 +341,7 @@ CREATE INDEX ix_product_images_multimodal_embedding_hnsw
     ON product_images USING hnsw (multimodal_embedding vector_cosine_ops);
 ```
 
-#### 7.2. Lập chỉ mục sản phẩm và ảnh (admin)
+### Lập chỉ mục sản phẩm và ảnh (admin)
 
 **Sản phẩm — `POST /api/admin/products` và cập nhật sản phẩm**
 
@@ -344,7 +361,7 @@ CREATE INDEX ix_product_images_multimodal_embedding_hnsw
 
 Hiện chưa có endpoint `/api/admin/reindex` hoặc job nền để chạy lại embedding. Ảnh `pending`/`failed` không tự được thử lại; cần xóa và tải lại ảnh hoặc bổ sung job reindex. Embedding sản phẩm thiếu/cũ cũng không tự được tạo lại, nhưng có thể kích hoạt lại bằng thao tác cập nhật sản phẩm khi model sẵn sàng. Khi xóa sản phẩm hoặc ảnh, backend commit xóa dòng DB trước rồi gọi Cloudinary xóa file; nếu xóa file lỗi, backend ghi log để dọn thủ công.
 
-#### 7.3. Tìm kiếm và hợp nhất kết quả
+### Tìm kiếm và hợp nhất kết quả
 
 Có bốn kênh tìm kiếm. Mỗi kênh lấy tối đa 50 sản phẩm sau khi áp dụng các bộ lọc phù hợp (`is_active`, category, khoảng giá; tìm kiếm admin còn hỗ trợ lọc khuyến mãi):
 
@@ -376,7 +393,7 @@ def rrf(rankings: list[list[str]], k: int = 60) -> list[str]:
 
 Phân trang sau khi gộp: giữ tối đa top 100 product ID theo RRF rồi mới phân trang và nạp các bản ghi `ProductRead`. Response có danh sách ảnh của sản phẩm nhưng hiện không trả riêng ảnh khớp nhất hoặc điểm tương đồng.
 
-#### 7.4. Sơ đồ pipeline
+### Sơ đồ pipeline
 
 ```mermaid
 flowchart TD
@@ -463,7 +480,7 @@ flowchart TD
 
 `GET /api/products/search` chạy các kênh B, C, D; tìm bằng ảnh không có `q` chỉ chạy A; ảnh kèm `q` chạy A, B, C, D. Kênh D luôn chạy khi có chữ, không có tùy chọn bật/tắt. Các truy vấn áp dụng bộ lọc sản phẩm tương ứng (`is_active`, category, khoảng giá; admin còn có khuyến mãi). Nếu encode văn bản lỗi, kênh đó được ghi log và bỏ qua; lỗi encode ảnh truy vấn được đẩy lên và không có fallback riêng. Hiện không có route/job reindex; embedding `pending`/`failed` hoặc bị cũ không tự động được tạo lại.
 
-#### 7.5. Ví dụ gửi ảnh truy vấn
+### Ví dụ gửi ảnh truy vấn
 
 `POST /api/products/search/image` nhận `multipart/form-data` với field `file` và field `q` tùy chọn. Frontend gửi `Blob`/`File` trực tiếp trong `FormData`, không gửi base64 trong JSON:
 
@@ -484,20 +501,5 @@ const response = await fetch("/api/products/search/image", {
 
 Không tự đặt `Content-Type: multipart/form-data`; trình duyệt cần tự thêm multipart boundary.
 
-## Cấu trúc thư mục (tham khảo)
 
-```text
-.
-├── src/web_ban_hang_backend/
-│   ├── api/routers/  # Các nhóm endpoint FastAPI
-│   ├── core/         # Kết nối database, Firebase, auth và dependency
-│   ├── models/       # Model SQLModel ánh xạ bảng PostgreSQL
-│   ├── schemas/      # Schema request/response
-│   ├── services/     # Tìm kiếm, embedding và xử lý ảnh
-│   ├── config.py     # Đọc cấu hình từ .env
-│   └── main.py       # Khởi tạo FastAPI, middleware và router
-├── db.sql            # Cấu trúc bảng và index PostgreSQL
-├── pyproject.toml    # Python version và dependency
-└── uv.lock           # Phiên bản dependency đã khóa
-```
 
