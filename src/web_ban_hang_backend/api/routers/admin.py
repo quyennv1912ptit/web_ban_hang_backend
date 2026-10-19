@@ -1,8 +1,7 @@
 from decimal import Decimal
-import hashlib
 import logging
 from datetime import datetime, timezone
-from typing import Any, List, Literal, Optional
+from typing import List, Literal, Optional
 from uuid import UUID, uuid4
 
 from cloudinary import uploader
@@ -14,7 +13,6 @@ from slugify import slugify
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import func, or_, select
 
-
 from web_ban_hang_backend.api.routers.products import refresh_product_rating
 from web_ban_hang_backend.schemas.user import UserStatusUpdate
 from web_ban_hang_backend.core.auth import get_admin_user
@@ -24,7 +22,7 @@ from web_ban_hang_backend.models.category import Category
 from web_ban_hang_backend.models.order import Order, OrderStatus
 from web_ban_hang_backend.models.order_item import OrderItem
 from web_ban_hang_backend.models.payment import Payment, PaymentStatus
-from web_ban_hang_backend.models.product import TEXT_EMBED_DIM, Product
+from web_ban_hang_backend.models.product import Product
 from web_ban_hang_backend.models.product_image import IMAGE_EMBED_DIM, ProductImage
 from web_ban_hang_backend.models.review import Review
 from web_ban_hang_backend.models.user import User
@@ -32,7 +30,7 @@ from web_ban_hang_backend.schemas.product import ProductCreate, ProductRead
 from web_ban_hang_backend.schemas.product_image import ProductImageRead
 from web_ban_hang_backend.schemas.order import OrderStatusUpdate
 from web_ban_hang_backend.schemas.category import CategoryCreate
-from web_ban_hang_backend.services.embedding import embed_image, embed_text
+from web_ban_hang_backend.services.embedding import embed_image
 from web_ban_hang_backend.services.search import execute_hybrid_search
 from web_ban_hang_backend.services.image_utils import (
     MAX_IMAGE_BYTES,
@@ -40,6 +38,11 @@ from web_ban_hang_backend.services.image_utils import (
     ImageValidationError,
     UnsupportedImageFormat,
     decode_image_bytes,
+)
+from web_ban_hang_backend.services.embedding_index import (
+    IMAGE_EMBEDDING_MODEL,
+    refresh_text_embedding,
+    retry_failed,
 )
 
 logger = logging.getLogger(__name__)
@@ -180,51 +183,6 @@ def search_admin_products_by_image(
     )
     return paginate_admin_ranked_products(session, product_ids, params)
 
-
-TEXT_EMBEDDING_MODEL = f"BGE-m3@{TEXT_EMBED_DIM}"
-
-
-def build_embedding_text(name: str, desc: str | None, attr: dict[str, Any]) -> str:
-    parts = [f"Tên: {name}"]
-    if desc:
-        parts.append(f"Mô tả: {desc}")
-    for key in sorted(attr):
-        val = attr[key]
-        if val in (None, "", [], {}):
-            continue
-        if isinstance(val, (list, tuple)):
-            val = ", ".join(str(v) for v in val)
-        parts.append(f"{key}: {val}")
-    return "\n".join(parts)
-
-
-def refresh_text_embedding(product: Product, model_state) -> None:
-    text = build_embedding_text(product.name, product.description, product.attributes)
-    new_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    if (
-        product.semantic_embedding is not None
-        and product.embedding_text_hash == new_hash
-        and product.embedding_model == TEXT_EMBEDDING_MODEL
-    ):
-        return
-
-    if model_state is None or not model_state.ready:
-        return
-
-    try:
-        vector = embed_text(model_state, text)
-        if len(vector) != TEXT_EMBED_DIM:
-            raise ValueError(f"Vector {len(vector)} chiều, cột trong DB cần vector {TEXT_EMBED_DIM} chiều")
-    except Exception:
-        logger.exception("Không tạo được text embedding cho sản phẩm %s", product.slug)
-        return
-
-    product.semantic_embedding = vector
-    product.embedding_model = TEXT_EMBEDDING_MODEL
-    product.embedding_text_hash = new_hash
-    product.embedding_updated_at = datetime.now(timezone.utc)
-
-
 _DB_ERRORS = {
     "products_slug_key": (status.HTTP_409_CONFLICT, "Slug đã tồn tại"),
     "products_sku_key": (status.HTTP_409_CONFLICT, "SKU đã tồn tại"),
@@ -299,9 +257,6 @@ def delete_product(product_id: UUID, session: SessionDep):
 
 
 # Quản lý ảnh sản phẩm
-
-IMAGE_EMBEDDING_MODEL = f"jina-clip-v2@{IMAGE_EMBED_DIM}"
-
 
 @router.post(
     "/products/{product_id}/images",
@@ -406,6 +361,10 @@ def delete_product_image(product_id: UUID, image_id: UUID, session: SessionDep):
     session.commit()
     delete_cloud_images([storage_key])
 
+@router.post("/embeddings/retry-failed")
+def retry_failed_embeddings(session: SessionDep):
+    """Đưa sản phẩm/ảnh bị failed về pending để worker encode lại."""
+    return retry_failed(session)
 
 # CRUD QUẢN LÝ DANH MỤC (Categories)
 

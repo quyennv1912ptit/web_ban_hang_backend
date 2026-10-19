@@ -21,6 +21,11 @@ from web_ban_hang_backend.api.routers import (
     admin
 )
 
+import contextlib
+
+from web_ban_hang_backend.core.database import engine
+from web_ban_hang_backend.services.embedding_index import embedding_worker
+
 init_firebase()
 cloudinary.config(
     cloud_name=settings.CLOUDINARY_CLOUD_NAME,
@@ -37,12 +42,16 @@ async def lifespan(app: FastAPI):
     try:
         app.state.model_state = await asyncio.to_thread(load_models)
     except Exception:
-        logger.exception("Không nạp được model tìm kiếm; API tìm kiếm sẽ tạm trả 503")
+        logger.exception("Không nạp được model tìm kiếm; worker sẽ thử nạp lại định kỳ")
+
+    worker = asyncio.create_task(embedding_worker(app, engine))
     try:
         yield
     finally:
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
         app.state.model_state = None
-
 
 app = FastAPI(lifespan=lifespan)
 

@@ -32,6 +32,14 @@ class Product(SQLModel, table=True):
             "average_rating >= 0 AND average_rating <= 5",
             name="products_average_rating_check",
         ),
+        CheckConstraint(
+            "embedding_status IN ('pending', 'indexed', 'failed')",
+            name="products_embedding_status_check",
+        ),
+        CheckConstraint(
+            "embedding_status <> 'indexed' OR semantic_embedding IS NOT NULL",
+            name="products_indexed_has_vector_check",
+        ),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -76,6 +84,10 @@ class Product(SQLModel, table=True):
     embedding_updated_at: datetime | None = Field(
         default=None, sa_type=DateTime(timezone=True)
     )
+    embedding_status: str = Field(
+        default="pending", index=True, sa_column_kwargs={"server_default": "pending"}
+    )
+    embedding_error: str | None = None
 
     category: Optional["Category"] = Relationship(back_populates="products")
     images: list["ProductImage"] = Relationship(

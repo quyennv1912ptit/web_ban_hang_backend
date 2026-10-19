@@ -105,8 +105,12 @@ CREATE TABLE "products" (
 	"embedding_model" text,
 	"embedding_text_hash" text,
 	"embedding_updated_at" timestamp with time zone,
+	"embedding_status" varchar DEFAULT 'pending' NOT NULL,
+	"embedding_error" varchar,
 	CONSTRAINT "products_average_rating_check" CHECK (((average_rating >= (0)::numeric) AND (average_rating <= (5)::numeric))),
 	CONSTRAINT "products_check" CHECK ((original_price >= price)),
+	CONSTRAINT "products_embedding_status_check" CHECK (((embedding_status)::text = ANY ((ARRAY['pending'::character varying, 'indexed'::character varying, 'failed'::character varying])::text[]))),
+	CONSTRAINT "products_indexed_has_vector_check" CHECK ((((embedding_status)::text <> 'indexed'::text) OR (semantic_embedding IS NOT NULL))),
 	CONSTRAINT "products_price_check" CHECK ((price >= (0)::numeric)),
 	CONSTRAINT "products_sold_count_check" CHECK ((sold_count >= 0)),
 	CONSTRAINT "products_stock_quantity_check" CHECK ((stock_quantity >= 0)),
@@ -183,6 +187,7 @@ CREATE INDEX "idx_products_category" ON "products" ("category_id");
 CREATE INDEX "idx_products_search" ON "products" USING gin ("search_vector");
 CREATE INDEX "idx_products_semantic" ON "products" USING hnsw ("semantic_embedding");
 CREATE INDEX "idx_products_unembedded" ON "products" ("id");
+CREATE INDEX "ix_products_embedding_status" ON "products" ("embedding_status");
 CREATE UNIQUE INDEX "products_pkey" ON "products" ("id");
 CREATE UNIQUE INDEX "products_sku_key" ON "products" ("sku");
 CREATE UNIQUE INDEX "products_slug_key" ON "products" ("slug");
